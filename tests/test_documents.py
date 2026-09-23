@@ -62,3 +62,22 @@ def test_close_removes(vector3):
     reg.close(doc.id)
     with pytest.raises(PdfToolError):
         reg.get(doc.id)
+
+
+def test_repair_path_used_when_pymupdf_rejects_original(vector3, monkeypatch):
+    from pdftool.core import documents
+
+    real_open = documents.open_fitz
+
+    def picky_open(path, password=None):
+        if path == vector3:
+            raise PdfToolError("corrupted", "simulated")
+        return real_open(path, password)
+
+    monkeypatch.setattr(documents, "open_fitz", picky_open)
+    reg = Registry()
+    doc = reg.open(vector3)
+    assert doc.repaired and doc.path != vector3 and doc.path.exists()
+    assert doc.page_count == 3
+    reg.close(doc.id)
+    assert not doc.path.exists()

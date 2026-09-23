@@ -113,7 +113,7 @@ class Registry:
             mtime_ns=st.st_mtime_ns,
             size=st.st_size,
             page_count=fdoc.page_count,
-            uploaded=paths.uploads_dir() in original.parents,
+            uploaded=paths.uploads_dir().resolve() in original.resolve().parents,
             repaired=repaired,
             fitz=fdoc,
         )
@@ -138,6 +138,8 @@ class Registry:
             doc = self._docs.pop(doc_id, None)
         if doc:
             doc.fitz.close()
+            if doc.repaired:
+                doc.path.unlink(missing_ok=True)
 
     def all(self) -> list[Document]:
         return list(self._docs.values())
