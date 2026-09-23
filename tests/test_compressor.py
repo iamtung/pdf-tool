@@ -168,3 +168,59 @@ def test_bad_xref_does_not_crash(mixed):
     with pikepdf.open(mixed) as pdf:
         compressor._recompress_one(pdf, 999999, compressor._Target(LEVELS["medium"], 600, False), report)
     assert report.images_skipped == 1
+
+
+def _build_smask_pdf(path, *, gray_like: bool, matte: bool, w: int = 2400, h: int = 3400):
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(595, 842))
+    if gray_like:
+        base = rng.integers(0, 255, (h, w, 1), dtype=np.uint8)
+        a = np.repeat(base, 3, -1)
+    else:
+        a = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
+    mask_kwargs = dict(
+        Type=pikepdf.Name.XObject, Subtype=pikepdf.Name.Image,
+        Width=w, Height=h, BitsPerComponent=8, ColorSpace=pikepdf.Name.DeviceGray,
+    )
+    if matte:
+        mask_kwargs["Matte"] = pikepdf.Array([1, 1, 1])
+    m = pdf.make_stream(rng.integers(0, 255, (h, w), dtype=np.uint8).tobytes(), **mask_kwargs)
+    im = pdf.make_stream(
+        a.tobytes(), Type=pikepdf.Name.XObject, Subtype=pikepdf.Name.Image, Width=w, Height=h,
+        BitsPerComponent=8, ColorSpace=pikepdf.Name.DeviceRGB, SMask=m,
+    )
+    page = pdf.pages[0]
+    page.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im0=im))
+    page.Contents = pdf.make_stream(b"q 595 0 0 842 0 0 cm /Im0 Do Q")
+    pdf.save(path)
+    pdf.close()
+
+
+def test_smask_image_is_compressed_with_matching_mask(tmp_path):
+    src = tmp_path / "smask.pdf"
+    _build_smask_pdf(src, gray_like=False, matte=False)
+    out = tmp_path / "smask_o.pdf"
+    rep = compressor.optimize(src, out, [LEVELS["medium"]])
+    assert rep.images_recompressed == 1
+    with pikepdf.open(out) as pdf:
+        im = pdf.pages[0].Resources.XObject.Im0
+        sm = im.SMask
+        assert (im.Width, im.Height) == (sm.Width, sm.Height)
+        assert "/SMask" in im
+
+
+def test_matte_mask_resized_and_not_grayscaled(tmp_path):
+    src = tmp_path / "matte.pdf"
+    _build_smask_pdf(src, gray_like=True, matte=True)
+    out = tmp_path / "matte_o.pdf"
+    rep = compressor.optimize(src, out, [LEVELS["strong"]])
+    assert rep.images_recompressed == 1
+    with pikepdf.open(out) as pdf:
+        im = pdf.pages[0].Resources.XObject.Im0
+        sm = im.SMask
+        assert (im.Width, im.Height) == (sm.Width, sm.Height)
+        assert im.ColorSpace != pikepdf.Name.DeviceGray
+        assert len(sm.Matte) == 3

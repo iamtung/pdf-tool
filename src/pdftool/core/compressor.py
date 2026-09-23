@@ -131,19 +131,29 @@ def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: Compr
         report.images_skipped += 1
         return
 
-    img = pikepdf.PdfImage(obj).as_pil_image()
+    # apply_mask=False: pikepdf >= 10 defaults to compositing the SMask into
+    # an RGBA image, which would make every image-with-transparency bail out
+    # at the mode check below. We handle the mask ourselves.
+    img = pikepdf.PdfImage(obj).as_pil_image(apply_mask=False)
     if img.mode not in ("RGB", "L"):
         report.images_skipped += 1
         return
+
+    smask = obj.get("/SMask")
+    has_matte = isinstance(smask, pikepdf.Stream) and "/Matte" in smask
 
     cap = t.settings.max_dpi
     scale = cap / t.dpi if t.dpi > cap * DOWNSAMPLE_MARGIN else 1.0
     img = _resize(img, scale)
     gray = img.mode == "L"
-    if not gray and t.settings.grayscale_scans and t.on_scan and is_near_gray(img):
-        img, gray = img.convert("L"), True
+    converted = False
+    # A Matte holds one entry per colour channel (premultiplied against a
+    # backdrop colour) - converting the image to grayscale would desync it.
+    if not gray and not has_matte and t.settings.grayscale_scans and t.on_scan and is_near_gray(img):
+        img = img.convert("L")
+        gray = True
+        converted = True
 
-    smask = obj.get("/SMask")
     old_len = inspect.image_size(pdf, xref)
     data = _jpeg(img, t.settings.quality)
 
@@ -152,7 +162,9 @@ def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: Compr
     old_mask_len = 0
     if isinstance(smask, pikepdf.Stream):
         old_mask_len = inspect.stream_len(smask)
-        if resized and "/Matte" not in smask:
+        if resized:
+            # Always keep the SMask in lockstep with the image size, Matte or
+            # not - the spec requires them to match dimensions.
             mask_img = pikepdf.PdfImage(smask).as_pil_image().convert("L")
             mask_img = mask_img.resize(img.size, Image.Resampling.LANCZOS)
             new_mask = zlib.compress(mask_img.tobytes(), 9)
@@ -165,7 +177,7 @@ def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: Compr
     obj.write(data, filter=pikepdf.Name.DCTDecode)
     obj.Width, obj.Height = img.width, img.height
     obj.BitsPerComponent = 8
-    if gray and cs != "/DeviceGray":
+    if converted:
         obj.ColorSpace = pikepdf.Name.DeviceGray
     if "/DecodeParms" in obj:
         del obj.DecodeParms
