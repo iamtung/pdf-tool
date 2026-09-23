@@ -1,4 +1,5 @@
 """Thumbnails and large page renders as WebP, cached on disk (spec §4.3)."""
+import os
 from pathlib import Path
 
 import pymupdf
@@ -14,6 +15,12 @@ def _cache_file(fp: str, index: int, key: str) -> Path:
     d = paths.cache_dir() / "render" / fp
     d.mkdir(parents=True, exist_ok=True)
     return d / f"{index}_{key}.webp"
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
 
 
 def _to_webp(pix: pymupdf.Pixmap) -> bytes:
@@ -33,7 +40,7 @@ def thumbnail(fdoc: pymupdf.Document, fp: str, index: int, width: int = 160) -> 
     page = fdoc[index]
     scale = width / page.rect.width if page.rotation % 180 == 0 else width / page.rect.height
     data = _to_webp(page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False))
-    cached.write_bytes(data)
+    _write_atomic(cached, data)
     return data
 
 
@@ -44,7 +51,7 @@ def render(fdoc: pymupdf.Document, fp: str, index: int, scale: float = 1.5) -> b
     if cached.exists():
         return cached.read_bytes()
     data = _to_webp(page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False))
-    cached.write_bytes(data)
+    _write_atomic(cached, data)
     return data
 
 
