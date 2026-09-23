@@ -1,0 +1,35 @@
+[project]
+name = "pdftool"
+version = "0.1.0"
+description = "Local PDF analysis, page editing and compression tool"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "pymupdf>=1.26",
+    "pikepdf>=9.0",
+    "pillow>=11.0",
+    "numpy>=2.0",
+]
+
+[project.scripts]
+pdftool = "pdftool.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pdftool"]
+# the built frontend is git-ignored; include it so `uv tool install .` ships the UI
+artifacts = ["src/pdftool/static/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: long-running performance tests (run with -m slow)"]
+addopts = "-m 'not slow'"
+filterwarnings = ["ignore::DeprecationWarning"]
