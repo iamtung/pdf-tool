@@ -1,7 +1,9 @@
 """Export pipeline: assemble -> compress (per page / whole file / target size) -> split -> atomic write."""
+import errno
 import math
 import os
 import re
+import secrets
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,12 +14,18 @@ import pymupdf
 from pdftool.core import compressor, estimate
 from pdftool.core.assemble import Sources, assemble
 from pdftool.core.errors import PdfToolError
-from pdftool.core.plan import LADDER, FileSettings, ImageSettings, Plan, page_overrides, resolve_file
+from pdftool.core.plan import LADDER, LEVELS, FileSettings, ImageSettings, Plan, page_overrides, resolve_file
 
 TARGET_BUDGET = 0.9
-MAX_RETRIES = 2
+MAX_PASSES = 3          # full optimize passes in target mode (spec §4.6: first run + 2 retries)
 SPLIT_FILL = 0.95
 MB = 1_000_000
+DEST_FREE_FACTOR = 2    # spec §7: >= 2x the source size free at the destination
+WORK_FREE_FACTOR = 3    # assembled + compressed passes + parts live in the workdir
+DEST_MANIFEST = "dest-tmp.txt"
+
+DISK_FULL_MSG = "Ổ đĩa không đủ chỗ trống để xuất file."
+GS_FAILED_NOTE = "Ghostscript lỗi, giữ kết quả nén thường."
 
 
 @dataclass
@@ -41,6 +49,8 @@ def _progress(cb, lo: float, hi: float, msg: str):
     return (lambda f: cb(lo + (hi - lo) * f, msg)) if cb else None
 
 
+# ---------------------------------------------------------------- safe writes
+
 def unique_path(dest_dir: Path, stem: str) -> Path:
     candidate = dest_dir / f"{stem}.pdf"
     n = 2
@@ -50,20 +60,88 @@ def unique_path(dest_dir: Path, stem: str) -> Path:
     return candidate
 
 
-def atomic_write(src: Path, dest_dir: Path, stem: str, expected_pages: int) -> Path:
-    """Copy src next to its final name as .tmp.pdf, verify it opens, then rename."""
-    final = unique_path(dest_dir, stem)
-    tmp = final.with_name(final.stem + ".tmp.pdf")
-    shutil.copyfile(src, tmp)
+def _create_tmp(dest_dir: Path, stem: str):
+    """Exclusively create `<stem>.<8 hex>.tmp.pdf`; never reuses an existing file."""
+    for _ in range(100):
+        tmp = dest_dir / f"{stem}.{secrets.token_hex(4)}.tmp.pdf"
+        try:
+            return os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), tmp
+        except FileExistsError:
+            continue
+    raise PdfToolError("internal", "Không tạo được file tạm ở thư mục đích.")
+
+
+def _publish(tmp: Path, dest_dir: Path, stem: str) -> Path:
+    """Give tmp its final name without ever replacing a file that exists."""
+    while True:
+        final = unique_path(dest_dir, stem)
+        try:
+            os.link(tmp, final)  # fails with FileExistsError instead of overwriting
+            return final
+        except FileExistsError:
+            continue  # someone created that name meanwhile: pick the next one
+        except OSError as e:
+            if e.errno == errno.ENOSPC:
+                raise
+            # Volume without hard links (e.g. exFAT/FAT USB drives): best-effort rename.
+            if final.exists():
+                continue
+            os.rename(tmp, final)
+            return final
+
+
+def atomic_write(src: Path, dest_dir: Path, stem: str, expected_pages: int, manifest: Path | None = None) -> Path:
+    """Copy src into a fresh tmp file next to its final name, verify it opens, then link it into place.
+
+    `manifest` (inside the job workdir) records every tmp path before it is written so a
+    cancelled job can remove it with `cleanup_dest_tmp`.
+    """
+    fd, tmp = _create_tmp(dest_dir, stem)
     try:
+        with os.fdopen(fd, "wb") as out:
+            if manifest is not None:
+                with open(manifest, "a", encoding="utf-8") as m:
+                    m.write(f"{tmp}\n")
+            with open(src, "rb") as inp:
+                shutil.copyfileobj(inp, out, 1 << 20)
         with pymupdf.open(tmp) as d:
             if d.page_count != expected_pages:
                 raise PdfToolError("internal", "File xuất ra bị lỗi (sai số trang).")
-        os.replace(tmp, final)
+        return _publish(tmp, dest_dir, stem)
     finally:
         tmp.unlink(missing_ok=True)
-    return final
 
+
+def cleanup_dest_tmp(workdir: Path) -> list[Path]:
+    """Delete destination tmp files listed in the job's manifest (call after cancelling a job)."""
+    manifest = workdir / DEST_MANIFEST
+    if not manifest.exists():
+        return []
+    removed = []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line.endswith(".tmp.pdf"):
+            continue
+        p = Path(line)
+        try:
+            p.unlink()
+            removed.append(p)
+        except FileNotFoundError:
+            pass
+    manifest.unlink(missing_ok=True)
+    return removed
+
+
+def _check_space(path: Path, need: int) -> None:
+    if shutil.disk_usage(path).free < need:
+        raise PdfToolError("disk_full", DISK_FULL_MSG)
+
+
+def _is_disk_full(e: BaseException) -> bool:
+    return (isinstance(e, OSError) and e.errno == errno.ENOSPC) or "No space left on device" in str(e)
+
+
+# ---------------------------------------------------------------- split options
 
 def parse_ranges(text: str, page_count: int) -> list[list[int]]:
     parts = []
@@ -95,8 +173,45 @@ def group_by_size(sizes: list[int], limit: int) -> list[list[int]]:
     return groups
 
 
+def validate_split(split: dict | None, page_count: int) -> tuple[str, object] | None:
+    """Check split options up front: ("ranges", groups) | ("size", limit_bytes) | None."""
+    if split is None:
+        return None
+    mode = split.get("mode") if isinstance(split, dict) else None
+    if mode == "ranges":
+        return "ranges", parse_ranges(str(split.get("ranges") or ""), page_count)
+    if mode == "size":
+        try:
+            mb = float(split["maxMB"])
+        except (KeyError, TypeError, ValueError):
+            raise PdfToolError("bad_request", "Chưa nhập dung lượng tối đa mỗi phần.")
+        if not math.isfinite(mb) or mb <= 0 or int(mb * MB) < 1:
+            raise PdfToolError("bad_request", "Dung lượng tối đa mỗi phần phải lớn hơn 0.")
+        return "size", int(mb * MB)
+    raise PdfToolError("bad_request", "Chế độ tách không hợp lệ.")
+
+
+# ---------------------------------------------------------------- compression
+
 def _page_settings(n: int, overrides: dict[int, ImageSettings], base: ImageSettings | None) -> list[ImageSettings | None]:
     return [overrides.get(i, base) for i in range(n)]
+
+
+def _strip_metadata(path: Path, out: Path) -> Path:
+    """Rewrite path without Info dict / XMP (used for files not produced by compressor.optimize)."""
+    with pikepdf.open(path) as pdf:
+        compressor.save_optimized(pdf, out, strip_metadata=True)
+    return out
+
+
+def _split_suggestion(size: int, target: int) -> int | None:
+    return None if size <= target else math.ceil(size / (TARGET_BUDGET * target))
+
+
+def _set_target(c: Compressed, target: int) -> None:
+    size = c.path.stat().st_size
+    c.target_met = size <= target
+    c.split_suggestion = _split_suggestion(size, target)
 
 
 def compress_to_target(
@@ -104,48 +219,69 @@ def compress_to_target(
 ) -> Compressed:
     """Spec §4.6 'nén về dưới X MB'."""
     target = fs.target_bytes
+    budget = TARGET_BUDGET * target
     sizes = estimate.measure_sizes(src)
     free = [i for i in range(n) if i not in overrides]
-    fixed = 0
-    for s in set(overrides.values()):
-        fixed += estimate.estimate(src, sizes, [i for i, v in overrides.items() if v == s], s, workdir)
-    budget = TARGET_BUDGET * target - fixed
+    groups: dict[ImageSettings, list[int]] = {}
+    for i, s in overrides.items():
+        groups.setdefault(s, []).append(i)
+    fixed = sum(estimate.estimate(src, sizes, pages, s, workdir) for s, pages in groups.items())
+    sample = estimate.prepare(src, sizes, free, workdir)  # extracted once, reused for every rung
 
-    rung = len(LADDER) - 1
-    for k, s in enumerate(LADDER):
+    def est(k: int) -> int:
+        return fixed + (sample.estimate(LADDER[k]) if sample else 0)
+
+    last = len(LADDER) - 1
+    rung = last
+    for k in range(len(LADDER)):
         if progress:
             progress(0.3 * k / len(LADDER))
-        if estimate.estimate(src, sizes, free, s, workdir) <= budget:
+        if est(k) <= budget:
             rung = k
             break
 
-    result = Compressed(path=workdir / "target.pdf")
-    for attempt in range(MAX_RETRIES + 1):
-        s = LADDER[rung]
+    best: Compressed | None = None
+    ran_last = False
+    for p in range(MAX_PASSES):
         if progress:
-            progress(0.3 + 0.2 * attempt)
-        rep = compressor.optimize(
-            src, result.path, _page_settings(n, overrides, s), strip_metadata=fs.strip_metadata
-        )
-        result.level = s
-        result.warnings = rep.warnings
-        if result.path.stat().st_size <= target or rung == len(LADDER) - 1:
+            progress(0.3 + 0.6 * p / MAX_PASSES)
+        out = workdir / f"target-{p + 1}.pdf"
+        rep = compressor.optimize(src, out, _page_settings(n, overrides, LADDER[rung]), strip_metadata=fs.strip_metadata)
+        ran_last = ran_last or rung == last
+        size = out.stat().st_size
+        if best is None or size < best.path.stat().st_size:
+            if best is not None:
+                best.path.unlink(missing_ok=True)
+            best = Compressed(path=out, warnings=rep.warnings, level=LADDER[rung])
+        else:
+            out.unlink(missing_ok=True)
+        if size <= target or rung == last or not free:
             break
-        rung += 1
+        # Correct the estimates by what the full pass actually produced and jump
+        # straight to the lightest rung expected to fit (at least one step heavier).
+        factor = size / max(est(rung), 1)
+        rung = next((k for k in range(rung + 1, last + 1) if est(k) * factor <= budget), last)
+        if p + 1 == MAX_PASSES - 1:
+            rung = last  # the final allowed pass must be the strongest rung (spec step 5)
 
+    if sample:
+        sample.close()
+    result = best
     if result.path.stat().st_size > target:
         if overrides:
             result.notes.append("Bỏ qua Ghostscript vì có trang mang mức nén riêng.")
-        elif compressor.ghostscript_available():
+        elif ran_last and compressor.ghostscript_available():
             gs_out = workdir / "target-gs.pdf"
-            compressor.ghostscript(src, gs_out)
-            if gs_out.stat().st_size < result.path.stat().st_size:
-                result.path = gs_out
-                result.notes.append("Đã dùng Ghostscript /screen để nén mạnh nhất.")
-    size = result.path.stat().st_size
-    result.target_met = size <= target
-    if not result.target_met:
-        result.split_suggestion = math.ceil(size / (TARGET_BUDGET * target))
+            try:
+                compressor.ghostscript(src, gs_out)
+                if fs.strip_metadata:
+                    gs_out = _strip_metadata(gs_out, workdir / "target-gs-clean.pdf")
+                if gs_out.stat().st_size < result.path.stat().st_size:
+                    result.path = gs_out
+                    result.notes.append("Đã dùng Ghostscript /screen để nén mạnh nhất.")
+            except PdfToolError:
+                result.notes.append(GS_FAILED_NOTE)
+    _set_target(result, target)
     return result
 
 
@@ -159,9 +295,13 @@ def compress(plan: Plan, src: Path, workdir: Path, progress=None) -> Compressed 
     if fs is not None and fs.use_ghostscript:
         out = workdir / "gs.pdf"
         compressor.ghostscript(src, out, fs.image)
+        if fs.strip_metadata:
+            out = _strip_metadata(out, workdir / "gs-clean.pdf")
         c = Compressed(path=out, level=fs.image)
         if overrides:
             c.notes.append("Ghostscript nén đồng đều cả file; mức riêng từng trang không được áp dụng.")
+        if fs.target_bytes is not None:
+            _set_target(c, fs.target_bytes)
         return c
     if fs is not None and fs.target_bytes is not None:
         return compress_to_target(src, n, overrides, fs, workdir, progress)
@@ -174,8 +314,11 @@ def compress(plan: Plan, src: Path, workdir: Path, progress=None) -> Compressed 
     return Compressed(path=out, warnings=rep.warnings, level=base)
 
 
+# ---------------------------------------------------------------- export
+
 def _write_parts(final: Path, groups: list[list[int]], opts: ExportOptions, stem: str, limit: int | None,
-                 workdir: Path, warnings: list[str]) -> list[Path]:
+                 workdir: Path, warnings: list[str], strip: bool = False,
+                 manifest: Path | None = None) -> list[Path]:
     """Write each group as a part. With a size limit, halve oversize multi-page parts (spec §4.7)."""
     queue = [g for g in groups]
     parts: list[tuple[list[int], Path]] = []
@@ -187,81 +330,103 @@ def _write_parts(final: Path, groups: list[list[int]], opts: ExportOptions, stem
         with pikepdf.open(final) as pdf, pikepdf.new() as new:
             for i in g:
                 new.pages.append(pdf.pages[i])
-            compressor.save_optimized(new, tmp)
+            compressor.save_optimized(new, tmp, strip_metadata=strip)
         if limit and tmp.stat().st_size > limit:
             if len(g) > 1:
                 mid = len(g) // 2
                 queue[:0] = [g[:mid], g[mid:]]
+                tmp.unlink(missing_ok=True)
                 continue
             warnings.append(f"Trang {g[0] + 1} lớn hơn giới hạn mỗi phần, được xuất thành một phần riêng.")
         parts.append((g, tmp))
     parts.sort(key=lambda p: p[0][0])
     return [
-        atomic_write(tmp, opts.dest_dir, f"{stem}_part{n}", len(g)) for n, (g, tmp) in enumerate(parts, 1)
+        atomic_write(tmp, opts.dest_dir, f"{stem}_part{n}", len(g), manifest) for n, (g, tmp) in enumerate(parts, 1)
     ]
 
 
 def run_export(plan: Plan, sources: Sources, opts: ExportOptions, workdir: Path, progress=None) -> dict:
+    try:
+        return _run_export(plan, sources, opts, workdir, progress)
+    except PdfToolError:
+        raise
+    except Exception as e:
+        if _is_disk_full(e):
+            raise PdfToolError("disk_full", DISK_FULL_MSG) from e
+        raise
+
+
+def _run_export(plan: Plan, sources: Sources, opts: ExportOptions, workdir: Path, progress=None) -> dict:
     if not plan.pages:
         raise PdfToolError("bad_request", "Không có trang nào để xuất.")
+    n = len(plan.pages)
+    split = validate_split(opts.split, n)  # before any heavy work
     used = {p.source.docId for p in plan.pages if p.source.type == "pdf"}
     original_size = sum(Path(sources[d]["path"]).stat().st_size for d in used)
     opts.dest_dir.mkdir(parents=True, exist_ok=True)
-    if shutil.disk_usage(opts.dest_dir).free < 2 * original_size:
-        raise PdfToolError("disk_full", "Ổ đĩa không đủ chỗ trống để xuất file.")
-
     workdir.mkdir(parents=True, exist_ok=True)
+    _check_space(opts.dest_dir, DEST_FREE_FACTOR * original_size)
+    _check_space(workdir, WORK_FREE_FACTOR * original_size)
+    manifest = workdir / DEST_MANIFEST
+
     assembled = workdir / "assembled.pdf"
     if progress:
         progress(0.02, "Đang dựng file")
     assemble(plan, sources, assembled, _progress(progress, 0.02, 0.15, "Đang dựng file"))
 
+    fs = resolve_file(plan.fileCompression)
+    strip = bool(fs and fs.strip_metadata)
     if progress:
         progress(0.15, "Đang nén")
     comp = compress(plan, assembled, workdir, _progress(progress, 0.15, 0.85, "Đang nén"))
     # baseline = edit-only file, still saved with object streams / unused-object cleanup
     baseline = workdir / "packed.pdf"
     with pikepdf.open(assembled) as pdf:
-        compressor.save_optimized(pdf, baseline)
-    if baseline.stat().st_size >= assembled.stat().st_size:
-        baseline = assembled
+        compressor.save_optimized(pdf, baseline, strip_metadata=strip)
+    if not strip and baseline.stat().st_size >= assembled.stat().st_size:
+        baseline = assembled  # the assembled file still carries metadata, so only when not stripping
     final, already_optimal = baseline, False
     if comp is not None:
         if comp.path.stat().st_size < baseline.stat().st_size:
             final = comp.path
         else:
             already_optimal = True
+    compressed = comp is not None and not already_optimal
 
-    stem = opts.base_name + ("_compressed" if comp is not None else "_edited")
-    n = len(plan.pages)
+    target_met = split_suggestion = None
+    if fs is not None and fs.target_bytes is not None and comp is not None:
+        size = final.stat().st_size  # judged on the file actually written
+        target_met = size <= fs.target_bytes
+        split_suggestion = _split_suggestion(size, fs.target_bytes)
+
+    stem = opts.base_name + ("_compressed" if compressed else "_edited")
     warnings = list(comp.warnings) if comp else []
     if progress:
         progress(0.9, "Đang ghi file")
-    split = opts.split
     if split is None:
-        outputs = [atomic_write(final, opts.dest_dir, stem, n)]
-    elif split.get("mode") == "ranges":
-        outputs = _write_parts(final, parse_ranges(split.get("ranges", ""), n), opts, stem, None, workdir, warnings)
-    elif split.get("mode") == "size":
-        limit = int(float(split["maxMB"]) * MB)
-        groups = group_by_size(estimate.measure_sizes(final), limit)
-        outputs = _write_parts(final, groups, opts, stem, limit, workdir, warnings)
+        outputs = [atomic_write(final, opts.dest_dir, stem, n, manifest)]
+    elif split[0] == "ranges":
+        outputs = _write_parts(final, split[1], opts, stem, None, workdir, warnings, strip, manifest)
     else:
-        raise PdfToolError("bad_request", "Chế độ tách không hợp lệ.")
+        limit = split[1]
+        groups = group_by_size(estimate.measure_sizes(final), limit)
+        outputs = _write_parts(final, groups, opts, stem, limit, workdir, warnings, strip, manifest)
+    manifest.unlink(missing_ok=True)  # every tmp is gone once the writes returned
 
     result_size = sum(p.stat().st_size for p in outputs)
     notes = list(comp.notes) if comp else []
     if already_optimal:
         notes.append("File đã tối ưu, không giảm thêm được.")
+    level = comp.level if compressed else None
     return {
         "outputs": [{"path": str(p), "size": p.stat().st_size, "name": p.name} for p in outputs],
         "originalSize": original_size,
         "resultSize": result_size,
-        "compressed": comp is not None and not already_optimal,
+        "compressed": compressed,
         "alreadyOptimal": already_optimal,
-        "level": {"maxDpi": comp.level.max_dpi, "quality": comp.level.quality} if comp and comp.level else None,
-        "targetMet": comp.target_met if comp else None,
-        "splitSuggestion": comp.split_suggestion if comp else None,
+        "level": {"maxDpi": level.max_dpi, "quality": level.quality} if level else None,
+        "targetMet": target_met,
+        "splitSuggestion": split_suggestion,
         "notes": notes,
         "warnings": warnings,
     }
@@ -270,11 +435,13 @@ def run_export(plan: Plan, sources: Sources, opts: ExportOptions, workdir: Path,
 def run_estimate(plan: Plan, sources: Sources, page_ids: list[str] | None, level: str | None,
                  workdir: Path, progress=None) -> dict:
     """Estimate for selected pages at a level (page scope) or the whole plan (file scope)."""
-    from pdftool.core.plan import LEVELS
-
+    if page_ids is not None and level not in LEVELS:
+        raise PdfToolError("bad_request", "Chưa chọn mức nén hợp lệ để ước tính.")
     workdir.mkdir(parents=True, exist_ok=True)
     if page_ids is not None:
         chosen = [p for p in plan.pages if p.id in set(page_ids)]
+        if not chosen:
+            raise PdfToolError("bad_request", "Chưa chọn trang nào để ước tính.")
         plan = Plan(pages=chosen)
     assembled = workdir / "est-assembled.pdf"
     assemble(plan, sources, assembled)
@@ -306,15 +473,15 @@ def run_estimate(plan: Plan, sources: Sources, page_ids: list[str] | None, level
         est = int(ratio * original)
     elif fs.target_bytes is not None:
         budget = TARGET_BUDGET * fs.target_bytes - est
-        chosen = LADDER[-1]
-        for s in LADDER:
-            e = estimate.estimate(assembled, sizes, free, s, workdir)
-            if e <= budget:
-                chosen, free_est = s, e
-                break
-        else:
-            free_est = estimate.estimate(assembled, sizes, free, chosen, workdir)
-        est += free_est
+        sample = estimate.prepare(assembled, sizes, free, workdir)
+
+        def free_est(s: ImageSettings) -> int:
+            return sample.estimate(s) if sample else 0
+
+        chosen = next((s for s in LADDER if free_est(s) <= budget), LADDER[-1])
+        est += free_est(chosen)
+        if sample:
+            sample.close()
         result["level"] = {"maxDpi": chosen.max_dpi, "quality": chosen.quality}
         result["targetMet"] = est <= fs.target_bytes
     else:
