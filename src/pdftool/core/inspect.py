@@ -27,11 +27,16 @@ def placements(page: pymupdf.Page) -> list[Placement]:
         xref = info.get("xref", 0)
         if not xref:
             continue
-        bbox = pymupdf.Rect(info["bbox"]) & page.rect
+        raw_bbox = pymupdf.Rect(info["bbox"])
+        if raw_bbox.is_empty:
+            continue
+        bbox = raw_bbox & page.rect
         if bbox.is_empty:
             continue
-        # geometric mean handles rotated placements (bbox axes swapped)
-        dpi = math.sqrt((info["width"] * info["height"]) / (bbox.width * bbox.height)) * 72
+        # geometric mean handles rotated placements (bbox axes swapped);
+        # DPI is computed from the unclipped bbox so an off-page placement
+        # doesn't inflate the effective resolution.
+        dpi = math.sqrt((info["width"] * info["height"]) / (raw_bbox.width * raw_bbox.height)) * 72
         out.append(Placement(
             xref, info["width"], info["height"], dpi, abs(bbox) / area,
             tuple(round(v, 1) for v in bbox),

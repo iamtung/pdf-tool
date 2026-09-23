@@ -89,3 +89,82 @@ def test_ghostscript_custom_settings(mixed, tmp_path):
     out = tmp_path / "gs.pdf"
     compressor.ghostscript(mixed, out, ImageSettings(100, 60))
     assert out.stat().st_size < mixed.stat().st_size * 0.2
+
+
+def test_multi_placement_keeps_largest(tmp_path):
+    doc = pymupdf.open()
+    page = doc.new_page()
+    photo = make.jpeg_bytes(1200, 1600)
+    x = page.insert_image(page.rect, stream=photo)
+    page.insert_image(pymupdf.Rect(0, 0, 30, 40), xref=x)
+    src = tmp_path / "multi.pdf"
+    doc.save(src)
+    doc.close()
+
+    with pymupdf.open(src) as d:
+        xrefs = {info["xref"] for info in d[0].get_image_info(xrefs=True)}
+    assert len(xrefs) == 1  # PyMuPDF dedups identical streams to one xref
+
+    out = tmp_path / "multi_o.pdf"
+    compressor.optimize(src, out, [LEVELS["light"]])
+    w, _ = image_dims(out, 0)
+    assert w == 1200  # full-page placement DPI ~145 < 200 cap, so no downsample
+
+
+def test_image_shared_with_untouched_page_is_kept(tmp_path):
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.new_page()
+    p1, p2 = doc[0], doc[1]
+    photo = make.jpeg_bytes(2400, 2400)
+    x = p1.insert_image(p1.rect, stream=photo)
+    p2.insert_image(p2.rect, xref=x)
+    src = tmp_path / "shared.pdf"
+    doc.save(src)
+    doc.close()
+
+    out = tmp_path / "shared_o.pdf"
+    compressor.optimize(src, out, [None, LEVELS["strong"]])
+    assert image_dims(out, 0) == image_dims(src, 0)
+
+
+def test_colour_key_masked_image_is_skipped(tmp_path):
+    src = tmp_path / "ck.pdf"
+    doc = pymupdf.open()
+    doc.new_page()
+    doc.save(src)
+    doc.close()
+
+    with pikepdf.open(src, allow_overwriting_input=True) as pdf:
+        img_bytes = Image.new("RGB", (200, 200), (30, 60, 90)).tobytes()
+        img = pdf.make_stream(img_bytes)
+        img.Type = pikepdf.Name.XObject
+        img.Subtype = pikepdf.Name.Image
+        img.Width = 200
+        img.Height = 200
+        img.BitsPerComponent = 8
+        img.ColorSpace = pikepdf.Name.DeviceRGB
+        img.Mask = pikepdf.Array([0, 10, 0, 10, 0, 10])
+        page = pdf.pages[0]
+        page.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im0=img))
+        page.Contents = pdf.make_stream(b"q 595 0 0 842 0 0 cm /Im0 Do Q")
+        pdf.save(src)
+
+    with pikepdf.open(src) as pdf:
+        before = next(iter(pdf.pages[0].images.values()))
+        before_width, before_filter = int(before.Width), before.get("/Filter")
+
+    out = tmp_path / "ck_o.pdf"
+    rep = compressor.optimize(src, out, [LEVELS["strong"]])
+    assert rep.images_skipped == 1 and rep.images_recompressed == 0
+    with pikepdf.open(out) as pdf:
+        after = next(iter(pdf.pages[0].images.values()))
+        assert int(after.Width) == before_width
+        assert after.get("/Filter") == before_filter
+
+
+def test_bad_xref_does_not_crash(mixed):
+    report = compressor.CompressReport()
+    with pikepdf.open(mixed) as pdf:
+        compressor._recompress_one(pdf, 999999, compressor._Target(LEVELS["medium"], 600, False), report)
+    assert report.images_skipped == 1

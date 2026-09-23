@@ -43,24 +43,29 @@ def is_near_gray(img: Image.Image) -> bool:
 @dataclass
 class _Target:
     settings: ImageSettings
-    dpi: float          # highest effective DPI among placements
+    dpi: float          # lowest effective DPI among placements (largest on-page size)
     on_scan: bool       # placed on at least one scan page
 
 
 def _collect(path: Path, page_settings: list[ImageSettings | None]) -> dict[int, _Target]:
     per_xref: dict[int, list[tuple[ImageSettings, float, bool]]] = {}
+    protected: set[int] = set()
     with pymupdf.open(path) as fdoc:
         for i, page in enumerate(fdoc):
             s = page_settings[i] if i < len(page_settings) else None
-            if s is None:
-                continue
             places = inspect.placements(page)
+            if s is None:
+                # None = untouched: any image also used on this page must be
+                # protected everywhere, even where it appears with real settings.
+                protected.update(p.xref for p in places)
+                continue
             scan = inspect.is_scan(page, places)
             for p in places:
                 per_xref.setdefault(p.xref, []).append((s, p.dpi, scan))
     return {
-        x: _Target(lightest([e[0] for e in entries]), max(e[1] for e in entries), any(e[2] for e in entries))
+        x: _Target(lightest([e[0] for e in entries]), min(e[1] for e in entries), any(e[2] for e in entries))
         for x, entries in per_xref.items()
+        if x not in protected
     }
 
 
@@ -73,6 +78,15 @@ def _colorspace_name(obj) -> str | None:
             return name if n in (1, 3) else None
         return name
     return str(cs) if cs is not None else None
+
+
+def _filter_names(obj) -> list[str]:
+    f = obj.get("/Filter")
+    if f is None:
+        return []
+    if isinstance(f, pikepdf.Array):
+        return [str(x) for x in f]
+    return [str(f)]
 
 
 def _resize(img: Image.Image, scale: float) -> Image.Image:
@@ -89,21 +103,35 @@ def _jpeg(img: Image.Image, quality: int) -> bytes:
 
 
 def _recompress_one(pdf: pikepdf.Pdf, xref: int, t: _Target, report: CompressReport) -> None:
-    obj = pdf.get_object((xref, 0))
     report.images_total += 1
+    obj = pdf.get_object((xref, 0))
+    if not isinstance(obj, pikepdf.Stream) or obj.get("/Subtype") != pikepdf.Name.Image:
+        report.images_skipped += 1
+        return
+    try:
+        _recompress_body(pdf, xref, obj, t, report)
+    except Exception as e:  # one bad image must not abort the whole job
+        report.images_skipped += 1
+        report.warnings.append(f"Bỏ qua ảnh {xref}: {type(e).__name__}.")
+
+
+def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: CompressReport) -> None:
     if obj.get("/ImageMask") or int(obj.get("/BitsPerComponent", 8)) != 8 or "/Decode" in obj:
+        report.images_skipped += 1
+        return
+    if isinstance(obj.get("/Mask"), pikepdf.Array):  # colour-key mask: not representable after re-encode
         report.images_skipped += 1
         return
     cs = _colorspace_name(obj)
     if cs not in HANDLED_COLORSPACES:
         report.images_skipped += 1
         return
-    try:
-        img = pikepdf.PdfImage(obj).as_pil_image()
-    except Exception as e:  # undecodable (JPX quirks, exotic filters)
+    if "/DCTDecode" in _filter_names(obj) and "/DecodeParms" in obj:
+        # e.g. ColorTransform - PIL can't be relied on to honour DCT DecodeParms.
         report.images_skipped += 1
-        report.warnings.append(f"Bỏ qua ảnh {xref}: không giải mã được ({type(e).__name__}).")
         return
+
+    img = pikepdf.PdfImage(obj).as_pil_image()
     if img.mode not in ("RGB", "L"):
         report.images_skipped += 1
         return
@@ -118,16 +146,18 @@ def _recompress_one(pdf: pikepdf.Pdf, xref: int, t: _Target, report: CompressRep
     smask = obj.get("/SMask")
     old_len = inspect.image_size(pdf, xref)
     data = _jpeg(img, t.settings.quality)
+
+    resized = scale < 1
     new_mask = None
+    old_mask_len = 0
     if isinstance(smask, pikepdf.Stream):
-        try:
-            mask_img = _resize(pikepdf.PdfImage(smask).as_pil_image().convert("L"), 1.0)
+        old_mask_len = inspect.stream_len(smask)
+        if resized and "/Matte" not in smask:
+            mask_img = pikepdf.PdfImage(smask).as_pil_image().convert("L")
             mask_img = mask_img.resize(img.size, Image.Resampling.LANCZOS)
             new_mask = zlib.compress(mask_img.tobytes(), 9)
-        except Exception:
-            report.images_skipped += 1
-            return
-    new_len = len(data) + (len(new_mask) if new_mask is not None else 0)
+
+    new_len = len(data) + (len(new_mask) if new_mask is not None else old_mask_len)
     if new_len > old_len * MIN_GAIN:
         report.images_skipped += 1
         return
@@ -135,8 +165,8 @@ def _recompress_one(pdf: pikepdf.Pdf, xref: int, t: _Target, report: CompressRep
     obj.write(data, filter=pikepdf.Name.DCTDecode)
     obj.Width, obj.Height = img.width, img.height
     obj.BitsPerComponent = 8
-    if gray or cs != "/ICCBased":
-        obj.ColorSpace = pikepdf.Name.DeviceGray if gray else pikepdf.Name.DeviceRGB
+    if gray and cs != "/DeviceGray":
+        obj.ColorSpace = pikepdf.Name.DeviceGray
     if "/DecodeParms" in obj:
         del obj.DecodeParms
     if new_mask is not None:
@@ -209,6 +239,10 @@ def ghostscript(in_path: Path, out_path: Path, settings: ImageSettings | None = 
             f"-dJPEGQ={settings.quality}",
         ]
     args += [f"-sOutputFile={out_path}", str(in_path)]
-    result = subprocess.run(args, capture_output=True, text=True)
+    out_path.unlink(missing_ok=True)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        raise PdfToolError("internal", "Ghostscript quá thời gian.")
     if result.returncode != 0 or not out_path.exists():
         raise PdfToolError("internal", f"Ghostscript lỗi: {result.stderr.strip()[:300]}")
