@@ -1,5 +1,6 @@
 import io
 
+import numpy as np
 import pikepdf
 import pymupdf
 import pytest
@@ -224,3 +225,39 @@ def test_matte_mask_resized_and_not_grayscaled(tmp_path):
         assert (im.Width, im.Height) == (sm.Width, sm.Height)
         assert im.ColorSpace != pikepdf.Name.DeviceGray
         assert len(sm.Matte) == 3
+
+
+def test_smask_decode_array_not_applied_twice(tmp_path):
+    rng = np.random.default_rng(0)
+    w, h = 2400, 3400
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(595, 842))
+    a = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[:, : w // 2] = 255  # raw 255, but /Decode [1 0] maps it to alpha 0 (transparent)
+    mask[:, w // 2 :] = 0    # raw 0 maps to alpha 1 (opaque)
+    m = pdf.make_stream(
+        mask.tobytes(), Type=pikepdf.Name.XObject, Subtype=pikepdf.Name.Image,
+        Width=w, Height=h, BitsPerComponent=8, ColorSpace=pikepdf.Name.DeviceGray,
+        Decode=pikepdf.Array([1, 0]),
+    )
+    im = pdf.make_stream(
+        a.tobytes(), Type=pikepdf.Name.XObject, Subtype=pikepdf.Name.Image, Width=w, Height=h,
+        BitsPerComponent=8, ColorSpace=pikepdf.Name.DeviceRGB, SMask=m,
+    )
+    page = pdf.pages[0]
+    page.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im0=im))
+    page.Contents = pdf.make_stream(b"q 595 0 0 842 0 0 cm /Im0 Do Q")
+    src = tmp_path / "dec.pdf"
+    pdf.save(src)
+    pdf.close()
+
+    out = tmp_path / "dec_o.pdf"
+    rep = compressor.optimize(src, out, [LEVELS["medium"]])
+    assert rep.images_recompressed == 1
+    with pikepdf.open(out) as pdf2:
+        sm = pdf2.pages[0].Resources.XObject.Im0.SMask
+        assert "/Decode" not in sm  # deleted, so the stored bytes are the final (already-decoded) alpha
+        arr = np.asarray(pikepdf.PdfImage(sm).as_pil_image())
+        left_mean = arr[:, : arr.shape[1] // 2].mean()
+        assert left_mean < 20  # effective alpha stayed ~0, not re-inverted by a stale /Decode

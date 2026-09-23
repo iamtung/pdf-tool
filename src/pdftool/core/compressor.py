@@ -102,20 +102,26 @@ def _jpeg(img: Image.Image, quality: int) -> bytes:
     return buf.getvalue()
 
 
-def _recompress_one(pdf: pikepdf.Pdf, xref: int, t: _Target, report: CompressReport) -> None:
+def _recompress_one(
+    pdf: pikepdf.Pdf, xref: int, t: _Target, report: CompressReport, rewritten_smasks: set | None = None,
+) -> None:
     report.images_total += 1
     obj = pdf.get_object((xref, 0))
     if not isinstance(obj, pikepdf.Stream) or obj.get("/Subtype") != pikepdf.Name.Image:
         report.images_skipped += 1
         return
+    if rewritten_smasks is None:
+        rewritten_smasks = set()
     try:
-        _recompress_body(pdf, xref, obj, t, report)
+        _recompress_body(pdf, xref, obj, t, report, rewritten_smasks)
     except Exception as e:  # one bad image must not abort the whole job
         report.images_skipped += 1
         report.warnings.append(f"Bỏ qua ảnh {xref}: {type(e).__name__}.")
 
 
-def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: CompressReport) -> None:
+def _recompress_body(
+    pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: CompressReport, rewritten_smasks: set,
+) -> None:
     if obj.get("/ImageMask") or int(obj.get("/BitsPerComponent", 8)) != 8 or "/Decode" in obj:
         report.images_skipped += 1
         return
@@ -131,6 +137,19 @@ def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: Compr
         report.images_skipped += 1
         return
 
+    smask = obj.get("/SMask")
+    has_matte = False
+    if isinstance(smask, pikepdf.Stream):
+        if int(smask.get("/BitsPerComponent", 8)) not in (1, 8):
+            report.images_skipped += 1
+            return
+        if smask.objgen in rewritten_smasks:
+            # Two images sharing one SMask object: rewriting it twice for two
+            # different target sizes would corrupt whichever ran first.
+            report.images_skipped += 1
+            return
+        has_matte = "/Matte" in smask
+
     # apply_mask=False: pikepdf >= 10 defaults to compositing the SMask into
     # an RGBA image, which would make every image-with-transparency bail out
     # at the mode check below. We handle the mask ourselves.
@@ -138,9 +157,6 @@ def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: Compr
     if img.mode not in ("RGB", "L"):
         report.images_skipped += 1
         return
-
-    smask = obj.get("/SMask")
-    has_matte = isinstance(smask, pikepdf.Stream) and "/Matte" in smask
 
     cap = t.settings.max_dpi
     scale = cap / t.dpi if t.dpi > cap * DOWNSAMPLE_MARGIN else 1.0
@@ -188,6 +204,11 @@ def _recompress_body(pdf: pikepdf.Pdf, xref: int, obj, t: _Target, report: Compr
         smask.ColorSpace = pikepdf.Name.DeviceGray
         if "/DecodeParms" in smask:
             del smask.DecodeParms
+        if "/Decode" in smask:
+            # The new bytes are already-decoded (we applied the old /Decode
+            # array in Pillow above); leaving the key would invert them again.
+            del smask.Decode
+        rewritten_smasks.add(smask.objgen)
     report.images_recompressed += 1
 
 
@@ -218,10 +239,11 @@ def optimize(
     """Recompress images page by page. page_settings[i] = settings for page i (None = untouched)."""
     report = CompressReport()
     targets = _collect(in_path, page_settings)
+    rewritten_smasks: set = set()
     with pikepdf.open(in_path) as pdf:
         n = len(targets)
         for k, (xref, t) in enumerate(targets.items()):
-            _recompress_one(pdf, xref, t, report)
+            _recompress_one(pdf, xref, t, report, rewritten_smasks)
             if progress and k % 5 == 0:
                 progress(k / max(n, 1))
         save_optimized(pdf, out_path, strip_metadata)
