@@ -1,15 +1,10 @@
 export type PanelTab = "page" | "overview";
-export type PageOrigin = "user" | "scroll";
 
 /**
- * Right-panel tab rule (spec §11.5): a *user* page selection switches to "Trang"; a manual tab choice
- * sticks while scrolling (scroll-driven page changes keep the tab).
+ * Right-panel tab rule (spec §11.5): a *user* page selection switches to "Trang". The user-selection
+ * counter changes on every user selection (including re-selecting the current page) and never on
+ * scrolling, so a scroll-driven page change — or a manual tab choice — keeps the current tab.
  */
-export function tabAfterPageChange(
-  previousId: string | null,
-  nextId: string | null,
-  current: PanelTab,
-  origin: PageOrigin = "user",
-): PanelTab {
-  return nextId !== previousId && origin === "user" ? "page" : current;
+export function tabAfterSelection(previousSelection: number, nextSelection: number, current: PanelTab): PanelTab {
+  return nextSelection !== previousSelection ? "page" : current;
 }

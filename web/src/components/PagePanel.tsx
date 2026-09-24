@@ -9,7 +9,7 @@ import { estimatePlan, type EstimateOutcome } from "../lib/estimate";
 import { chooseEstimate } from "../lib/estimates";
 import { KIND_LABEL, LEVEL_LABEL, formatBytes, paperName } from "../lib/format";
 import { displaySize } from "../lib/pages";
-import { tabAfterPageChange, type PanelTab } from "../lib/panel";
+import { tabAfterSelection, type PanelTab } from "../lib/panel";
 import { useApp } from "../state/app";
 import { useCurrentPage, usePageDetail, useTargetIds } from "../state/selectors";
 import FileOverview from "./FileOverview";
@@ -18,18 +18,15 @@ import Kv from "./Kv";
 const LEVELS: Level[] = ["light", "medium", "strong"];
 
 export default function PagePanel() {
-  const { page } = useCurrentPage();
-  const { currentOrigin } = useApp();
-  const pageId = page?.id ?? null;
+  const { pageSelection } = useApp();
   const [tab, setTab] = useState<PanelTab>("page");
-  const previous = useRef(pageId);
+  const previousSelection = useRef(pageSelection);
   useEffect(() => {
     // Compute eagerly: a lazy setState updater would see the ref already advanced below.
-    const next = tabAfterPageChange(previous.current, pageId, tab, currentOrigin);
-    previous.current = pageId;
+    const next = tabAfterSelection(previousSelection.current, pageSelection, tab);
+    previousSelection.current = pageSelection;
     if (next !== tab) setTab(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageId, currentOrigin]);
+  }, [pageSelection, tab]);
 
   return (
     <aside className="flex min-h-0 flex-col border-l bg-card">

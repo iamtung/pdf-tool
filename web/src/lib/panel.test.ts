@@ -1,23 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { tabAfterPageChange } from "./panel";
+import { tabAfterSelection } from "./panel";
 
-describe("tabAfterPageChange", () => {
-  it("switches to the page tab when the page changes", () => {
-    expect(tabAfterPageChange("a", "b", "overview")).toBe("page");
-    expect(tabAfterPageChange(null, "a", "overview")).toBe("page");
+describe("tabAfterSelection", () => {
+  it("switches to the page tab when the user-selection counter changes", () => {
+    expect(tabAfterSelection(0, 1, "overview")).toBe("page");
+    expect(tabAfterSelection(3, 4, "page")).toBe("page");
   });
 
-  it("keeps a manual tab choice while the page is unchanged", () => {
-    expect(tabAfterPageChange("a", "a", "overview")).toBe("overview");
-    expect(tabAfterPageChange("a", "a", "page")).toBe("page");
-  });
-
-  it("keeps a manual tab choice when scrolling changes the page", () => {
-    expect(tabAfterPageChange("a", "b", "overview", "scroll")).toBe("overview");
-    expect(tabAfterPageChange("a", "b", "page", "scroll")).toBe("page");
-  });
-
-  it("switches to the page tab on a user page selection", () => {
-    expect(tabAfterPageChange("a", "b", "overview", "user")).toBe("page");
+  it("keeps the current tab when the counter is unchanged (scroll, or the same page)", () => {
+    expect(tabAfterSelection(3, 3, "overview")).toBe("overview");
+    expect(tabAfterSelection(3, 3, "page")).toBe("page");
   });
 });

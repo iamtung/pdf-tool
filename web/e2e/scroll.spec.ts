@@ -118,3 +118,20 @@ test("overview tab survives scrolling", async ({ page }) => {
   await page.getByTestId("thumb-5").click();
   await expect(page.getByRole("tab", { name: "Trang" })).toHaveAttribute("aria-selected", "true");
 });
+
+test("clicking the current thumbnail after scrolling switches to Trang", async ({ page }) => {
+  await page.goto(`/?open=${encodeURIComponent(SRC)}`);
+  await expect(page.getByTestId("thumb-1")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Tổng quan" }).click();
+  const viewer = page.getByTestId("viewer");
+  await viewer.hover();
+  await page.mouse.wheel(0, 3000);
+  await page.waitForTimeout(400);
+  await expect(page.getByRole("tab", { name: "Tổng quan" })).toHaveAttribute("aria-selected", "true");
+
+  const currentId = await page.locator(currentThumb()).getAttribute("data-testid");
+  if (!currentId) throw new Error("no current thumbnail");
+  await page.getByTestId(currentId).click();
+  await expect(page.getByRole("tab", { name: "Trang" })).toHaveAttribute("aria-selected", "true");
+});

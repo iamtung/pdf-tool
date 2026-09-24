@@ -35,8 +35,8 @@ interface AppContextValue {
   selected: Set<string>;
   setSelected: (s: Set<string>) => void;
   currentId: string | null;
-  /** Why the current page last changed: a user action (default) or the viewer's scroll tracking. */
-  currentOrigin: "user" | "scroll";
+  /** Bumped on every user page selection (even re-selecting the current page); never by scrolling. */
+  pageSelection: number;
   setCurrentId: (id: string | null, origin?: "user" | "scroll") => void;
   dialog: DialogState;
   setDialog: (d: DialogState) => void;
@@ -65,9 +65,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [currentId, setCurrentIdState] = useState<string | null>(null);
-  const [currentOrigin, setCurrentOrigin] = useState<"user" | "scroll">("user");
+  const [pageSelection, setPageSelection] = useState(0);
   const setCurrentId = useCallback((id: string | null, origin: "user" | "scroll" = "user") => {
-    setCurrentOrigin(origin);
+    if (origin === "user") setPageSelection((n) => n + 1);
     setCurrentIdState(id);
   }, []);
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
@@ -143,7 +143,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value: AppContextValue = {
     editor, dispatch, docs, primary: primaryId ? docs[primaryId] ?? null : null,
-    health, setHealth, selected, setSelected, currentId, currentOrigin, setCurrentId, dialog, setDialog, prompt,
+    health, setHealth, selected, setSelected, currentId, pageSelection, setCurrentId, dialog, setDialog, prompt,
     estimates, setEstimates, openPath, forgetDoc, showError,
   };
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
