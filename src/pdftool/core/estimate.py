@@ -46,9 +46,9 @@ def measure_sizes(path: Path) -> list[int]:
         return inspect.page_sizes(fdoc, pdf)
 
 
-def extract(src: Path, indices: list[int], out: Path) -> None:
+def extract(src: Path, indices: list[int], out: Path, password: str | None = None) -> None:
     """Copy the given pages into a new file, dropping resources those pages don't use."""
-    with pikepdf.open(src) as pdf, pikepdf.new() as new:
+    with pikepdf.open(src, password=password or "") as pdf, pikepdf.new() as new:
         for i in indices:
             new.pages.append(pdf.pages[i])
         # Pages sharing one big /Resources dict would otherwise drag every

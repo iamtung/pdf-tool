@@ -11,7 +11,7 @@ from pdftool.core.export import (
     run_export,
 )
 from pdftool.core.plan import Plan
-from tests.fixtures.make import jpeg_bytes
+from tests.fixtures.make import HEAVY, LIGHT, image_pages_pdf
 
 MB = 1_000_000
 
@@ -131,33 +131,6 @@ def test_estimate_file_target(scans, tmp_path):
 
 
 # ---------------------------------------------------------------- mixed-DPI fixtures
-
-PAGE_PT = (144, 180)  # small pages keep the fixtures (and every optimize pass) cheap
-
-
-def image_pages_pdf(path, pixel_sizes, title=None):
-    """One full-page JPEG per page, each with its own /Resources. DPI = pixels / 2 in."""
-    pdf = pikepdf.new()
-    for k, (w, h) in enumerate(pixel_sizes):
-        img = pikepdf.Stream(
-            pdf, jpeg_bytes(w, h, seed=k), Type=pikepdf.Name.XObject, Subtype=pikepdf.Name.Image,
-            Width=w, Height=h, ColorSpace=pikepdf.Name.DeviceRGB, BitsPerComponent=8,
-            Filter=pikepdf.Name.DCTDecode,
-        )
-        content = pikepdf.Stream(pdf, f"q {PAGE_PT[0]} 0 0 {PAGE_PT[1]} 0 0 cm /Im0 Do Q".encode())
-        pdf.pages.append(pikepdf.Page(pikepdf.Dictionary(
-            Type=pikepdf.Name.Page, MediaBox=[0, 0, *PAGE_PT], Contents=content,
-            Resources=pikepdf.Dictionary(XObject=pikepdf.Dictionary(Im0=img)),
-        )))
-    if title:
-        pdf.docinfo["/Title"] = title
-        with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
-            meta["dc:title"] = title
-    pdf.save(path)
-    return path
-
-
-HEAVY, LIGHT = (1200, 1500), (240, 300)  # 600 DPI and 120 DPI on a 2 x 2.5 in page
 
 
 @pytest.fixture(scope="module")
