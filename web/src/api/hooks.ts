@@ -69,26 +69,34 @@ export function useJob<R>(jobId: string | null): JobState<R> | null {
 }
 
 /** Wait for a job to finish (polling). Used where a promise is more convenient than a hook. */
-export async function waitJob<R>(jobId: string, onProgress?: (j: JobState<R>) => void): Promise<JobState<R>> {
+export async function waitJob<R>(
+  jobId: string, onProgress?: (j: JobState<R>) => void, signal?: AbortSignal,
+): Promise<JobState<R>> {
   for (;;) {
+    signal?.throwIfAborted();
     const job = await api.job<R>(jobId);
+    signal?.throwIfAborted();
     onProgress?.(job);
-    if (["done", "failed", "cancelled"].includes(job.status)) return job;
+    if (TERMINAL_STATUSES.includes(job.status)) return job;
     await new Promise((r) => setTimeout(r, 400));
   }
 }
 
+/** The analysis job itself failed or was cancelled: retrying would only start a new job. */
+export class JobFailedError extends Error {}
+
 /** Fetch the analysis report, waiting (by polling) for the background job on large files. */
 async function fetchAnalysis(
-  docId: string, onProgress: (j: JobState<unknown>) => void,
+  docId: string, onProgress: (j: JobState<unknown>) => void, signal?: AbortSignal,
 ): Promise<Report> {
   for (let round = 0; round < 3; round++) {
+    signal?.throwIfAborted();
     const r = await api.analysis(docId);
     if (r.status === "done") return r.report;
-    const job = await waitJob(r.jobId, onProgress);
-    if (job.status !== "done") throw new Error(job.error?.message ?? "Phân tích bị hủy.");
+    const job = await waitJob(r.jobId, onProgress, signal);
+    if (job.status !== "done") throw new JobFailedError(job.error?.message ?? "Phân tích bị hủy.");
   }
-  throw new Error("Không nhận được kết quả phân tích.");
+  throw new JobFailedError("Không nhận được kết quả phân tích.");
 }
 
 /**
@@ -100,8 +108,10 @@ export function useAnalysis(docId: string | null) {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["analysis", docId],
-    queryFn: () => fetchAnalysis(docId!, (j) => qc.setQueryData(["analysis-progress", docId], j)),
+    queryFn: ({ signal }) =>
+      fetchAnalysis(docId!, (j) => qc.setQueryData(["analysis-progress", docId], j), signal),
     enabled: !!docId,
+    retry: (n, e) => n < 2 && !(e instanceof JobFailedError),
     staleTime: Infinity,
   });
   const progress = useQuery<JobState<unknown> | null>({
@@ -139,6 +149,7 @@ export function useEstimate(
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const key = enabled && plan ? JSON.stringify([plan, pageIds, level]) : null;
+  const jobRef = useRef<JobState<EstimateResult> | null>(null);
   useEffect(() => {
     setJobId(null);
     setError(null);
@@ -158,11 +169,15 @@ export function useEstimate(
     return () => {
       active = false;
       clearTimeout(t);
-      if (started) cancel(started); // superseded or unmounted: stop the server-side job
+      // Superseded or unmounted: stop the server-side job unless it already finished.
+      const last = jobRef.current;
+      const finished = last?.id === started && TERMINAL_STATUSES.includes(last.status);
+      if (started && !finished) cancel(started);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   const job = useJob<EstimateResult>(jobId);
+  jobRef.current = job;
   return {
     loading: !!key && !error && job?.status !== "done" && job?.status !== "failed",
     result: job?.status === "done" ? job.result : null,
