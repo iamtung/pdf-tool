@@ -15,7 +15,11 @@ export function planDocIds(plan: Plan | null): string[] {
   return ids;
 }
 
-/** Bundle the reports/profiles of a plan's docs for `estimatePlan`; `ready` = every doc has a profile. */
+/**
+ * Bundle the reports/profiles of a plan's docs for `estimatePlan`; `ready` = every doc has a profile.
+ * A plan with no PDF documents needs no profile, so it is ready (blank/image pages are handled by
+ * `estimatePlan` itself).
+ */
 export function collectEstimateInputs(
   docIds: string[],
   reports: (Report | null)[],
@@ -32,6 +36,6 @@ export function collectEstimateInputs(
   return {
     reports: reportMap,
     profiles: profileMap,
-    ready: docIds.length > 0 && docIds.every((_, i) => !!profiles[i]),
+    ready: docIds.every((_, i) => !!profiles[i]),
   };
 }

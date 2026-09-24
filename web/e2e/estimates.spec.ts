@@ -78,3 +78,28 @@ test("instant estimates from the profile, without /api/estimate", async ({ page 
 
   console.log(`click→cards ${openMs}ms`);
 });
+
+test("a plan with no PDF pages is treated as profile-ready", async ({ page }) => {
+  await page.goto(`/?open=${encodeURIComponent(SRC)}`);
+  await expect(page.getByTestId("thumb-1")).toBeVisible();
+
+  // insert a blank page before page 1, then delete every PDF page
+  await page.getByTestId("insert-gap-0").hover();
+  await page.getByRole("button", { name: "+ Chèn" }).first().click();
+  await page.getByRole("button", { name: "Trang trắng" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Chèn", exact: true }).click();
+  await expect(page.getByTestId("thumb-6")).toBeVisible();
+
+  await page.getByTestId("thumb-2").click();
+  await page.getByTestId("thumb-6").click({ modifiers: ["Shift"] });
+  await page.getByRole("button", { name: "Xóa" }).click();
+  await expect(page.getByTestId("thumb-2")).toHaveCount(0);
+
+  // nothing left to profile: the preset cards must not stay on "Đang chuẩn bị ước tính…"
+  await page.getByRole("button", { name: "Nén toàn file" }).click();
+  const dialog = page.getByRole("dialog");
+  await page.waitForTimeout(2000);
+  for (const preset of PRESETS) {
+    await expect(dialog.getByTestId(`preset-estimate-${preset}`)).not.toContainText("Đang chuẩn bị ước tính…");
+  }
+});

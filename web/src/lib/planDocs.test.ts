@@ -34,7 +34,10 @@ describe("collectEstimateInputs", () => {
     expect(partial.ready).toBe(false);
   });
 
-  it("is not ready for an empty plan", () => {
-    expect(collectEstimateInputs([], [], []).ready).toBe(false);
+  it("is ready for a plan with no PDF documents (nothing to profile)", () => {
+    const empty = collectEstimateInputs([], [], []);
+    expect(empty.ready).toBe(true);
+    expect(empty.reports).toEqual({});
+    expect(empty.profiles).toEqual({});
   });
 });
