@@ -95,6 +95,25 @@ export type AnalysisResponse =
   | { status: "done"; report: Report }
   | { status: "running"; jobId: string };
 
+export interface ProfileSetting {
+  maxDpi: number;
+  quality: number;
+  grayscaleScans: boolean;
+}
+
+/** Precomputed per-group compression ratios (spec §11.2). */
+export interface Profile {
+  version: number;
+  settings: Record<string, ProfileSetting>;
+  ratios: Record<string, Record<string, number>>;
+  pageCount: number;
+  fingerprint: string;
+}
+
+export type ProfileResponse =
+  | { status: "done"; profile: Profile }
+  | { status: "running"; jobId: string };
+
 export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface JobState<R = unknown> {
