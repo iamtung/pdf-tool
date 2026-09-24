@@ -40,6 +40,16 @@ test("instant estimates from the profile, without /api/estimate", async ({ page 
   await settle(page);
   expect(estimates).toBe(0);
 
+  // M3: with only grayscale on, the selected card's size equals the file estimate
+  const advancedToggle = dialog.getByRole("button", { name: "Tùy chỉnh nâng cao" });
+  await advancedToggle.click();
+  await dialog.getByRole("checkbox", { name: /Chuyển ảnh xám/ }).click();
+  const cardText = await dialog.getByTestId("preset-estimate-zalo").innerText();
+  await expect(page.getByTestId("file-estimate")).toContainText(cardText.slice(cardText.indexOf("~")));
+  await settle(page);
+  expect(estimates).toBe(0);
+  await advancedToggle.click(); // close advanced again
+
   // typing a target updates the chosen rung + estimate, still without requests
   await page.getByLabel("Hoặc nén về dưới (MB)").fill("5");
   await expect(page.getByTestId("file-estimate")).toContainText("→");

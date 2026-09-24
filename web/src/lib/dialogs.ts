@@ -86,6 +86,16 @@ export function effectivePreset({ preset, target, adv }: CompressionInput): Pres
   return hasTarget ? null : preset ?? "balanced";
 }
 
+/**
+ * What-if compression for a preset card: the preset plus the user's grayscale choice only, so a card's
+ * size matches the selected estimate when only "Chuyển ảnh xám" is set (spec §11.3).
+ */
+export function cardCompression(preset: Preset, adv: Advanced): FileCompression {
+  const advanced: Advanced = {};
+  if (adv.grayscaleScans != null) advanced.grayscaleScans = adv.grayscaleScans;
+  return { preset, targetMB: null, advanced };
+}
+
 /** Build the FileCompression to apply, or null while the input is invalid. */
 export function buildFileCompression(input: CompressionInput): FileCompression | null {
   if (Object.keys(validateCompression(input)).length) return null;

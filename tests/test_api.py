@@ -119,7 +119,11 @@ def test_profile_version_mismatch_recomputes(client, vector3, pdftool_home):
     cache.write_text(json.dumps(data))
     r = client.get(f"/api/docs/{doc['docId']}/profile")
     assert r.status_code == 202 and r.json()["status"] == "running"
-    wait_job(client, r.json()["jobId"])
+    job = wait_job(client, r.json()["jobId"])
+    assert job["status"] == "done", job["error"]
+    r = client.get(f"/api/docs/{doc['docId']}/profile")
+    assert r.status_code == 200 and r.json()["profile"]["version"] == 1
+    assert json.loads(cache.read_text())["version"] == 1
 
 
 def test_profile_dedup_same_job_id(client, mixed):

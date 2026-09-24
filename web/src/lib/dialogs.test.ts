@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DocInfo, Plan, PlanPage } from "../api/types";
 import {
-  buildFileCompression, canCompare, coversAllPages, defaultDestination, effectivePreset, isFullExport,
-  parseRanges, subsetPlan, validateCompression,
+  buildFileCompression, canCompare, cardCompression, coversAllPages, defaultDestination, effectivePreset,
+  isFullExport, parseRanges, subsetPlan, validateCompression,
 } from "./dialogs";
 import { neighbourSize } from "./pages";
 
@@ -78,6 +78,16 @@ describe("compression input", () => {
     expect(buildFileCompression({ preset: null, target: "8", adv: { maxDpi: 100 } })).toEqual({ preset: "balanced", targetMB: null, advanced: { maxDpi: 100 } });
     expect(buildFileCompression({ preset: null, target: "", adv: { maxDpi: 1 } })).toBeNull();
     expect(effectivePreset({ preset: null, target: "", adv: {} })).toBe("balanced");
+  });
+});
+
+describe("cardCompression", () => {
+  it("carries only the preset and the user's grayscale choice", () => {
+    expect(cardCompression("balanced", {})).toEqual({ preset: "balanced", targetMB: null, advanced: {} });
+    expect(cardCompression("zalo", { grayscaleScans: true, maxDpi: 90, stripMetadata: true, useGhostscript: true }))
+      .toEqual({ preset: "zalo", targetMB: null, advanced: { grayscaleScans: true } });
+    expect(cardCompression("high", { grayscaleScans: false }))
+      .toEqual({ preset: "high", targetMB: null, advanced: { grayscaleScans: false } });
   });
 });
 

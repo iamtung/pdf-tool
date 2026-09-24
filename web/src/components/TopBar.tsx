@@ -2,7 +2,9 @@ import { Download, FolderOpen, Minimize2, Redo2, Undo2 } from "lucide-react";
 import { useAnalysis, useProfileEstimate } from "../api/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { describeFileCompression, formatBytes, percent } from "../lib/format";
+import { profileState } from "../lib/profileStatus";
 import { usePickAndOpen } from "../state/actions";
 import { useApp } from "../state/app";
 import IconButton from "./IconButton";
@@ -14,7 +16,7 @@ export default function TopBar() {
   const pickAndOpen = usePickAndOpen();
   const fc = editor.plan.fileCompression;
   const comp = report?.composition;
-  const profileState = !primary ? null : primaryProfile ? "ready" : profileError ? "error" : "computing";
+  const state = primary ? profileState(primaryProfile, profileError) : null;
 
   return (
     <header className="flex items-center gap-2.5 border-b bg-card px-3.5 py-2.5">
@@ -33,11 +35,20 @@ export default function TopBar() {
         <span className="font-semibold">PDF Tool</span>
       )}
       <div className="flex-1" />
-      {profileState && (
-        <span data-testid="profile-status" data-state={profileState} className="text-xs text-muted-foreground">
-          {profileState === "computing" ? "Đang chuẩn bị ước tính…" : ""}
+      {state === "error" ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span data-testid="profile-status" data-state="error" className="cursor-default text-xs text-destructive">
+              Không chuẩn bị được ước tính nhanh
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Hồ sơ nén không tính được; ước tính sẽ dùng máy chủ.</TooltipContent>
+        </Tooltip>
+      ) : state ? (
+        <span data-testid="profile-status" data-state={state} className="text-xs text-muted-foreground">
+          {state === "computing" ? "Đang chuẩn bị ước tính…" : ""}
         </span>
-      )}
+      ) : null}
       {fc && <Badge variant="secondary">Nén: {describeFileCompression(fc)}</Badge>}
       <Button variant="outline" onClick={pickAndOpen}>
         <FolderOpen /> Mở file…

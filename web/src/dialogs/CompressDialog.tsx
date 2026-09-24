@@ -2,14 +2,18 @@ import { ChevronDown, ChevronRight, Mail, Scale, Smartphone, Sparkles } from "lu
 import { useMemo, useState } from "react";
 import { useEstimate, useProfileEstimate } from "../api/hooks";
 import type { Advanced, FileCompression, Preset } from "../api/types";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { buildFileCompression, effectivePreset, isManual, subsetPlan, validateCompression } from "../lib/dialogs";
+import {
+  buildFileCompression, cardCompression, effectivePreset, isManual, subsetPlan, validateCompression,
+} from "../lib/dialogs";
 import { estimatePlan } from "../lib/estimate";
 import { chooseEstimate } from "../lib/estimates";
 import { PRESET_LABEL, formatBytes } from "../lib/format";
+import { profileState } from "../lib/profileStatus";
 import { cn } from "../lib/utils";
 import { useApp, type ExportContext } from "../state/app";
 import { countOverrides, withFileCompression } from "../state/plan";
@@ -38,10 +42,11 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
   // Instant estimates from the precomputed profile; the server is only a fallback.
   const firstPdf = scope.pages.find((p) => p.source.type === "pdf");
   const estDocId = firstPdf && firstPdf.source.type === "pdf" ? firstPdf.source.docId : null;
-  const { report: estReport, profile: estProfile } = useProfileEstimate(estDocId);
+  const { report: estReport, profile: estProfile, error: estError } = useProfileEstimate(estDocId);
   const reports = estDocId && estReport ? { [estDocId]: estReport } : {};
   const profiles = estDocId && estProfile ? { [estDocId]: estProfile } : {};
-  const ready = !!estProfile;
+  const status = profileState(estProfile, estError);
+  const ready = status === "ready";
   const estimateFor = (compression: FileCompression | null) =>
     ready && compression && scope.pages.length
       ? estimatePlan({ plan: scope, reports, profiles, fileCompression: compression })
@@ -77,10 +82,12 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
       <div className="grid grid-cols-2 gap-2">
         {PRESETS.map((p) => {
           const Icon = PRESET_ICON[p];
-          const outcome = estimateFor(buildFileCompression({ preset: p, target: "", adv: {} }));
-          const size = !ready
+          const outcome = estimateFor(cardCompression(p, adv));
+          const size = status === "computing"
             ? "Đang chuẩn bị ước tính…"
-            : outcome?.kind === "ok" ? `~${formatBytes(outcome.estimatedBytes)}` : "—";
+            : status === "error"
+              ? "Không ước tính trước được"
+              : outcome?.kind === "ok" ? `~${formatBytes(outcome.estimatedBytes)}` : "—";
           return (
             <Button key={p} type="button" variant="outline"
               className={cn(
@@ -155,15 +162,20 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
         </span>
       </div>
       {est.result?.targetMet === false && (
-        <div className="mt-2 rounded-md bg-amber-100 px-2.5 py-2 text-xs leading-relaxed text-amber-700 dark:bg-amber-950 dark:text-amber-300">
-          Có thể không đạt mục tiêu. Nếu vẫn lớn hơn, công cụ sẽ gợi ý tách thành nhiều phần.
-        </div>
+        <Alert className="mt-2 border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+          <AlertDescription className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+            Có thể không đạt mục tiêu. Nếu vẫn lớn hơn, công cụ sẽ gợi ý tách thành nhiều phần.
+          </AlertDescription>
+        </Alert>
       )}
       {est.error && <div className="text-xs text-destructive">{est.error}</div>}
       {overrides > 0 && (
-        <div className="mt-2 rounded-md bg-amber-100 px-2.5 py-2 text-xs leading-relaxed text-amber-700 dark:bg-amber-950 dark:text-amber-300" data-testid="override-warning">
-          {overrides} trang đang có mức nén riêng sẽ được thay bằng mức chung.
-        </div>
+        <Alert className="mt-2 border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
+          data-testid="override-warning">
+          <AlertDescription className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+            {overrides} trang đang có mức nén riêng sẽ được thay bằng mức chung.
+          </AlertDescription>
+        </Alert>
       )}
     </Modal>
   );
