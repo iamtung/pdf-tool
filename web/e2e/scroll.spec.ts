@@ -100,3 +100,21 @@ test("navigated page stays current on a tall viewport", async ({ page }) => {
     .poll(() => page.locator(currentThumb()).getAttribute("data-testid"))
     .toBe(most);
 });
+
+test("overview tab survives scrolling", async ({ page }) => {
+  await page.goto(`/?open=${encodeURIComponent(SRC)}`);
+  await expect(page.getByTestId("thumb-1")).toBeVisible();
+
+  await page.getByRole("tab", { name: "Tổng quan" }).click();
+  await expect(page.getByRole("tab", { name: "Tổng quan" })).toHaveAttribute("aria-selected", "true");
+
+  const viewer = page.getByTestId("viewer");
+  await viewer.hover();
+  await page.mouse.wheel(0, 3000);
+  await page.waitForTimeout(400);
+  await expect(page.getByRole("tab", { name: "Tổng quan" })).toHaveAttribute("aria-selected", "true");
+
+  // a user page selection switches back to "Trang"
+  await page.getByTestId("thumb-5").click();
+  await expect(page.getByRole("tab", { name: "Trang" })).toHaveAttribute("aria-selected", "true");
+});

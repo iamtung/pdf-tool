@@ -11,4 +11,13 @@ describe("tabAfterPageChange", () => {
     expect(tabAfterPageChange("a", "a", "overview")).toBe("overview");
     expect(tabAfterPageChange("a", "a", "page")).toBe("page");
   });
+
+  it("keeps a manual tab choice when scrolling changes the page", () => {
+    expect(tabAfterPageChange("a", "b", "overview", "scroll")).toBe("overview");
+    expect(tabAfterPageChange("a", "b", "page", "scroll")).toBe("page");
+  });
+
+  it("switches to the page tab on a user page selection", () => {
+    expect(tabAfterPageChange("a", "b", "overview", "user")).toBe("page");
+  });
 });

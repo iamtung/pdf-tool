@@ -35,7 +35,9 @@ interface AppContextValue {
   selected: Set<string>;
   setSelected: (s: Set<string>) => void;
   currentId: string | null;
-  setCurrentId: (id: string | null) => void;
+  /** Why the current page last changed: a user action (default) or the viewer's scroll tracking. */
+  currentOrigin: "user" | "scroll";
+  setCurrentId: (id: string | null, origin?: "user" | "scroll") => void;
   dialog: DialogState;
   setDialog: (d: DialogState) => void;
   /** Password prompt is a separate layer so it can sit on top of another dialog. */
@@ -62,7 +64,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [currentId, setCurrentIdState] = useState<string | null>(null);
+  const [currentOrigin, setCurrentOrigin] = useState<"user" | "scroll">("user");
+  const setCurrentId = useCallback((id: string | null, origin: "user" | "scroll" = "user") => {
+    setCurrentOrigin(origin);
+    setCurrentIdState(id);
+  }, []);
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
   const [prompt, setPrompt] = useState<PasswordPrompt | null>(null);
   const [estimates, setEstimates] = useState<Record<string, number>>({});
@@ -72,7 +79,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const alive = new Set(planPages.map((p) => p.id));
     setSelected((s) => pruneSet(s, alive));
-    setCurrentId((c) => (c && !alive.has(c) ? null : c));
+    setCurrentIdState((c) => (c && !alive.has(c) ? null : c));
     setEstimates((e) => pruneRecord(e, alive));
   }, [planPages]);
 
@@ -136,7 +143,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value: AppContextValue = {
     editor, dispatch, docs, primary: primaryId ? docs[primaryId] ?? null : null,
-    health, setHealth, selected, setSelected, currentId, setCurrentId, dialog, setDialog, prompt,
+    health, setHealth, selected, setSelected, currentId, currentOrigin, setCurrentId, dialog, setDialog, prompt,
     estimates, setEstimates, openPath, forgetDoc, showError,
   };
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

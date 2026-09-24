@@ -19,13 +19,17 @@ const LEVELS: Level[] = ["light", "medium", "strong"];
 
 export default function PagePanel() {
   const { page } = useCurrentPage();
+  const { currentOrigin } = useApp();
   const pageId = page?.id ?? null;
   const [tab, setTab] = useState<PanelTab>("page");
   const previous = useRef(pageId);
   useEffect(() => {
-    setTab((current) => tabAfterPageChange(previous.current, pageId, current));
+    // Compute eagerly: a lazy setState updater would see the ref already advanced below.
+    const next = tabAfterPageChange(previous.current, pageId, tab, currentOrigin);
     previous.current = pageId;
-  }, [pageId]);
+    if (next !== tab) setTab(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageId, currentOrigin]);
 
   return (
     <aside className="flex min-h-0 flex-col border-l bg-card">

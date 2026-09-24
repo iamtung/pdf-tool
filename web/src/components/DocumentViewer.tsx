@@ -99,7 +99,7 @@ export default function DocumentViewer() {
       if (!id || id === currentIdRef.current) return;
       lastScrollId.current = id;
       currentIdRef.current = id;
-      setCurrentId(id);
+      setCurrentId(id, "scroll");
       if (selectedCountRef.current <= 1) setSelected(new Set([id]));
     });
   };
