@@ -28,6 +28,14 @@ def test_analysis_job_runs_in_process(manager, mixed, pdftool_home):
     assert not list((pdftool_home / "tmp").glob("job-*"))
 
 
+def test_profile_job_caches_analysis_and_profile(manager, vector3, pdftool_home):
+    job = manager.wait(manager.submit("profile", {"path": str(vector3), "fingerprint": "fpP"}).id)
+    assert job.status == "done", job.error
+    assert job.result["version"] == 1
+    assert (pdftool_home / "cache" / "analysis" / "fpP.json").exists()
+    assert (pdftool_home / "cache" / "profile" / "fpP.json").exists()
+
+
 def test_error_is_reported(manager, tmp_path):
     job = manager.wait(manager.submit("export", {
         "plan": {"pages": []}, "sources": {}, "destDir": str(tmp_path), "baseName": "x",

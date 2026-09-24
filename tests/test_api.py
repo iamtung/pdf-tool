@@ -86,6 +86,55 @@ def test_analysis_background_for_big_docs(client, mixed, monkeypatch):
     assert r.status_code == 200 and r.json()["status"] == "done"
 
 
+def test_profile_endpoint_running_then_done(client, vector3, pdftool_home):
+    doc = open_doc(client, vector3)
+    r = client.get(f"/api/docs/{doc['docId']}/profile")
+    assert r.status_code == 202 and r.json()["status"] == "running"
+    job = wait_job(client, r.json()["jobId"])
+    assert job["status"] == "done", job["error"]
+    r = client.get(f"/api/docs/{doc['docId']}/profile")
+    assert r.status_code == 200 and r.json()["status"] == "done"
+    prof = r.json()["profile"]
+    assert prof["version"] == 1 and prof["pageCount"] == 3
+    assert set(prof["ratios"]) == {"vector"}
+    assert list((pdftool_home / "cache" / "analysis").glob("*.json"))
+    assert list((pdftool_home / "cache" / "profile").glob("*.json"))
+
+
+def test_profile_cached_second_call_is_200(client, vector3):
+    doc = open_doc(client, vector3)
+    wait_job(client, client.get(f"/api/docs/{doc['docId']}/profile").json()["jobId"])
+    r1 = client.get(f"/api/docs/{doc['docId']}/profile")
+    r2 = client.get(f"/api/docs/{doc['docId']}/profile")
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.json()["profile"] == r2.json()["profile"]
+
+
+def test_profile_version_mismatch_recomputes(client, vector3, pdftool_home):
+    doc = open_doc(client, vector3)
+    wait_job(client, client.get(f"/api/docs/{doc['docId']}/profile").json()["jobId"])
+    cache = next((pdftool_home / "cache" / "profile").glob("*.json"))
+    data = json.loads(cache.read_text())
+    data["version"] = 999
+    cache.write_text(json.dumps(data))
+    r = client.get(f"/api/docs/{doc['docId']}/profile")
+    assert r.status_code == 202 and r.json()["status"] == "running"
+    wait_job(client, r.json()["jobId"])
+
+
+def test_profile_dedup_same_job_id(client, mixed):
+    doc = open_doc(client, mixed)
+    r1 = client.get(f"/api/docs/{doc['docId']}/profile")
+    r2 = client.get(f"/api/docs/{doc['docId']}/profile")
+    assert r1.status_code == 202 and r2.status_code == 202
+    assert r1.json()["jobId"] == r2.json()["jobId"]
+
+
+def test_profile_unknown_doc_404(client):
+    r = client.get("/api/docs/nope/profile")
+    assert r.status_code == 404 and r.json()["code"] == "not_found"
+
+
 def test_thumb_and_render(client, mixed):
     doc = open_doc(client, mixed)
     r = client.get(f"/api/docs/{doc['docId']}/pages/1/thumb?w=120")

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-from pdftool import analysis_cache, paths
+from pdftool import analysis_cache, paths, profile_cache
 from pdftool.api.deps import jobs, registry
 from pdftool.core import analyzer, renderer
 from pdftool.core.documents import Document, Registry
@@ -81,6 +81,18 @@ def analysis(doc_id: str, reg: Registry = Depends(registry), jm: JobManager = De
         return {"status": "done", "report": report}
     job = jm.find_active("analysis", doc.fingerprint) or jm.submit(
         "analysis", {**doc.source(), "fingerprint": doc.fingerprint}, key=doc.fingerprint
+    )
+    return JSONResponse({"status": "running", "jobId": job.id}, status_code=202)
+
+
+@router.get("/{doc_id}/profile")
+def profile(doc_id: str, reg: Registry = Depends(registry), jm: JobManager = Depends(jobs)) -> dict:
+    doc = reg.get(doc_id)
+    cached = profile_cache.load(doc.fingerprint)
+    if cached is not None:
+        return {"status": "done", "profile": cached}
+    job = jm.find_active("profile", doc.fingerprint) or jm.submit(
+        "profile", {**doc.source(), "fingerprint": doc.fingerprint}, key=doc.fingerprint
     )
     return JSONResponse({"status": "running", "jobId": job.id}, status_code=202)
 
