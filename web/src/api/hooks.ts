@@ -195,9 +195,13 @@ export function usePageImage(source: Source, width: number, scale?: number): str
   return q.data ?? null;
 }
 
+/** Debounce before a server-side estimate is requested (exported for the e2e settle helper). */
+export const ESTIMATE_DEBOUNCE_MS = 600;
+
 /** Debounced size estimate. key changes trigger a new job; stale results are discarded. */
 export function useEstimate(
-  plan: Plan | null, pageIds: string[] | null, level: Level | null, enabled: boolean, delay = 600,
+  plan: Plan | null, pageIds: string[] | null, level: Level | null, enabled: boolean,
+  delay = ESTIMATE_DEBOUNCE_MS,
 ) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
