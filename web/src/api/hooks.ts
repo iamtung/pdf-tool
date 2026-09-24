@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./client";
-import type { EstimateResult, JobState, Level, Plan, Report, Source } from "./types";
+import type { EstimateResult, JobState, Level, Plan, Profile, Report, Source } from "./types";
 
 const TERMINAL_STATUSES = ["done", "failed", "cancelled"];
 
@@ -124,6 +124,59 @@ export function useAnalysis(docId: string | null) {
     report: query.data ?? null,
     job: query.data ? null : progress.data ?? null,
     error: query.error ?? null,
+  };
+}
+
+/** Fetch the compression profile, waiting (by polling) for the background job. */
+async function fetchProfile(
+  docId: string, onProgress: (j: JobState<unknown>) => void, signal?: AbortSignal,
+): Promise<Profile> {
+  for (let round = 0; round < 3; round++) {
+    signal?.throwIfAborted();
+    const r = await api.profile(docId);
+    if (r.status === "done") return r.profile;
+    const job = await waitJob(r.jobId, onProgress, signal);
+    if (job.status !== "done") throw new JobFailedError(job.error?.message ?? "Tính hồ sơ nén bị hủy.");
+  }
+  throw new JobFailedError("Không nhận được hồ sơ nén.");
+}
+
+/**
+ * Compression profile for a document. One shared query per docId (React Query dedups the promise).
+ * `enabled` should become true once the analysis report exists.
+ */
+export function useProfile(docId: string | null, enabled = true) {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ["profile", docId],
+    queryFn: ({ signal }) =>
+      fetchProfile(docId!, (j) => qc.setQueryData(["profile-progress", docId], j), signal),
+    enabled: !!docId && enabled,
+    retry: (n, e) => n < 2 && !(e instanceof JobFailedError),
+    staleTime: Infinity,
+  });
+  const progress = useQuery<JobState<unknown> | null>({
+    queryKey: ["profile-progress", docId],
+    queryFn: () => null,
+    enabled: false,
+    staleTime: Infinity,
+  });
+  return {
+    profile: query.data ?? null,
+    job: query.data ? null : progress.data ?? null,
+    error: query.error ?? null,
+  };
+}
+
+/** Analysis report + compression profile for the same doc, ready for `estimatePlan`. */
+export function useProfileEstimate(docId: string | null) {
+  const { report, job: analysisJob, error: analysisError } = useAnalysis(docId);
+  const profileState = useProfile(docId, !!report);
+  return {
+    report,
+    profile: profileState.profile,
+    job: profileState.job ?? (report ? null : analysisJob),
+    error: profileState.error ?? analysisError,
   };
 }
 

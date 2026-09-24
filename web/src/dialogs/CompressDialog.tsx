@@ -1,12 +1,14 @@
 import { ChevronDown, ChevronRight, Mail, Scale, Smartphone, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useEstimate } from "../api/hooks";
-import type { Advanced, Preset } from "../api/types";
+import { useEstimate, useProfileEstimate } from "../api/hooks";
+import type { Advanced, FileCompression, Preset } from "../api/types";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { buildFileCompression, effectivePreset, isManual, subsetPlan, validateCompression } from "../lib/dialogs";
+import { estimatePlan } from "../lib/estimate";
+import { chooseEstimate } from "../lib/estimates";
 import { PRESET_LABEL, formatBytes } from "../lib/format";
 import { cn } from "../lib/utils";
 import { useApp, type ExportContext } from "../state/app";
@@ -32,8 +34,24 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
   const fc = useMemo(() => buildFileCompression({ preset, target, adv }), [preset, target, adv]);
   const overrides = countOverrides(editor.plan);
   const scope = subsetPlan(editor.plan, onlyIds);
+
+  // Instant estimates from the precomputed profile; the server is only a fallback.
+  const firstPdf = scope.pages.find((p) => p.source.type === "pdf");
+  const estDocId = firstPdf && firstPdf.source.type === "pdf" ? firstPdf.source.docId : null;
+  const { report: estReport, profile: estProfile } = useProfileEstimate(estDocId);
+  const reports = estDocId && estReport ? { [estDocId]: estReport } : {};
+  const profiles = estDocId && estProfile ? { [estDocId]: estProfile } : {};
+  const ready = !!estProfile;
+  const estimateFor = (compression: FileCompression | null) =>
+    ready && compression && scope.pages.length
+      ? estimatePlan({ plan: scope, reports, profiles, fileCompression: compression })
+      : null;
+  const instant = estimateFor(fc);
   const preview = fc && scope.pages.length ? withFileCompression(scope, fc) : null;
-  const est = useEstimate(preview, null, null, !!preview);
+  const server = useEstimate(preview, null, null, !!preview && instant?.kind !== "ok");
+  const chosen = chooseEstimate(instant, server.result);
+  const est = { result: chosen.result, loading: !chosen.result && server.loading, error: server.error };
+  const targetRung = instant?.kind === "ok" && instant.level ? instant.level : null;
 
   const close = () => setDialog({ kind: "none" });
   const apply = (thenExport: boolean) => {
@@ -59,6 +77,10 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
       <div className="grid grid-cols-2 gap-2">
         {PRESETS.map((p) => {
           const Icon = PRESET_ICON[p];
+          const outcome = estimateFor(buildFileCompression({ preset: p, target: "", adv: {} }));
+          const size = !ready
+            ? "Đang chuẩn bị ước tính…"
+            : outcome?.kind === "ok" ? `~${formatBytes(outcome.estimatedBytes)}` : "—";
           return (
             <Button key={p} type="button" variant="outline"
               className={cn(
@@ -68,6 +90,7 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
               onClick={() => { setPreset(p); setTarget(""); }}>
               <Icon className="size-4" />
               <span>{PRESET_LABEL[p]}</span>
+              <span className="text-xs font-normal text-muted-foreground" data-testid={`preset-estimate-${p}`}>{size}</span>
             </Button>
           );
         })}
@@ -78,6 +101,11 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
           disabled={manual} onChange={(e) => setTarget(e.target.value)} className="w-40"
           aria-invalid={!!errors.target} />
         {manual && <div className="text-xs text-muted-foreground">Đã đặt DPI/JPEG thủ công nên chế độ này tắt.</div>}
+        {targetRung && (
+          <div className="text-xs text-muted-foreground">
+            Bậc: {targetRung.maxDpi} DPI · JPEG {targetRung.quality} · ~{formatBytes(est.result?.estimatedBytes ?? 0)}
+          </div>
+        )}
       </div>
       {errors.target && <div className="text-xs text-destructive">{errors.target}</div>}
 

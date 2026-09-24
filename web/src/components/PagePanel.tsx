@@ -1,10 +1,12 @@
 import { Check } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { useAnalysis, useEstimate } from "../api/hooks";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAnalysis, useEstimate, useProfileEstimate } from "../api/hooks";
 import type { Level, Plan } from "../api/types";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { estimatePlan, type EstimateOutcome } from "../lib/estimate";
+import { chooseEstimate } from "../lib/estimates";
 import { KIND_LABEL, LEVEL_LABEL, formatBytes, paperName } from "../lib/format";
 import { displaySize } from "../lib/pages";
 import { tabAfterPageChange, type PanelTab } from "../lib/panel";
@@ -56,7 +58,21 @@ function PageInfo() {
   // Only what affects the estimate goes into the key: the target pages, without their current
   // level (Áp dụng changes it) and without file compression (the page level overrides it).
   const estPlan: Plan = { pages: targetPages.map((p) => ({ ...p, compress: null })), fileCompression: null };
-  const est = useEstimate(estPlan, targets, level, targets.length > 0 && !allBlank);
+  const estDocId = page?.source.type === "pdf" ? page.source.docId : null;
+  const { report: estReport, profile: estProfile } = useProfileEstimate(estDocId);
+  const instant = useMemo<EstimateOutcome | null>(() => {
+    if (!estDocId || !estReport || !estProfile || allBlank || !targets.length) return null;
+    return estimatePlan({
+      plan: editor.plan,
+      reports: { [estDocId]: estReport },
+      profiles: { [estDocId]: estProfile },
+      pageIds: targets,
+      level,
+    });
+  }, [estDocId, estReport, estProfile, allBlank, targets, editor.plan, level]);
+  const server = useEstimate(estPlan, targets, level, targets.length > 0 && !allBlank && instant?.kind !== "ok");
+  const chosen = chooseEstimate(instant, server.result);
+  const est = { result: chosen.result, loading: !chosen.result && server.loading, error: server.error };
   if (!page) return null;
 
   const size = displaySize(page, docs);

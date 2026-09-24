@@ -1,5 +1,5 @@
 import type {
-  AnalysisResponse, DocInfo, Health, JobState, Level, Plan, SplitOption, Source,
+  AnalysisResponse, DocInfo, Health, JobState, Level, Plan, ProfileResponse, SplitOption, Source,
 } from "./types";
 
 export class ApiError extends Error {
@@ -45,6 +45,7 @@ export const api = {
   },
 
   analysis: (docId: string) => request<AnalysisResponse>("GET", `/api/docs/${docId}/analysis`),
+  profile: (docId: string) => request<ProfileResponse>("GET", `/api/docs/${docId}/profile`),
   closeDoc: (docId: string) => request<{ ok: boolean }>("DELETE", `/api/docs/${docId}`),
 
   thumbUrl: (docId: string, index: number, width = 160) =>

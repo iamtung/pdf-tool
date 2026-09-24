@@ -1,5 +1,5 @@
 import { Download, FolderOpen, Minimize2, Redo2, Undo2 } from "lucide-react";
-import { useAnalysis } from "../api/hooks";
+import { useAnalysis, useProfileEstimate } from "../api/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { describeFileCompression, formatBytes, percent } from "../lib/format";
@@ -10,9 +10,11 @@ import IconButton from "./IconButton";
 export default function TopBar() {
   const { primary, editor, dispatch, setDialog } = useApp();
   const { report } = useAnalysis(primary?.docId ?? null);
+  const { profile: primaryProfile, error: profileError } = useProfileEstimate(primary?.docId ?? null);
   const pickAndOpen = usePickAndOpen();
   const fc = editor.plan.fileCompression;
   const comp = report?.composition;
+  const profileState = !primary ? null : primaryProfile ? "ready" : profileError ? "error" : "computing";
 
   return (
     <header className="flex items-center gap-2.5 border-b bg-card px-3.5 py-2.5">
@@ -31,6 +33,11 @@ export default function TopBar() {
         <span className="font-semibold">PDF Tool</span>
       )}
       <div className="flex-1" />
+      {profileState && (
+        <span data-testid="profile-status" data-state={profileState} className="text-xs text-muted-foreground">
+          {profileState === "computing" ? "Đang chuẩn bị ước tính…" : ""}
+        </span>
+      )}
       {fc && <Badge variant="secondary">Nén: {describeFileCompression(fc)}</Badge>}
       <Button variant="outline" onClick={pickAndOpen}>
         <FolderOpen /> Mở file…
