@@ -155,3 +155,7 @@ Công nghệ:
 - Giao diện: React, TypeScript, Tailwind CSS v4, shadcn/ui, lucide-react.
 
 Các component shadcn nằm trong `web/src/components/ui/`. Thêm component mới bằng `npx shadcn@latest add <tên>`, không sửa tay các file này; theme nằm ở `web/src/index.css`.
+
+## Giấy phép
+
+Phát hành theo giấy phép [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-or-later). Công cụ dùng [PyMuPDF](https://pymupdf.readthedocs.io), một thư viện theo AGPL-3.0, nên toàn bộ dự án cũng theo giấy phép này: bạn được tự do dùng, sửa và chia sẻ lại, với điều kiện bản chia sẻ lại (hoặc bản cung cấp cho người khác dùng qua mạng) phải công khai mã nguồn theo cùng giấy phép. Ghostscript (không bắt buộc) chỉ được gọi như một chương trình ngoài, không đóng gói kèm.
