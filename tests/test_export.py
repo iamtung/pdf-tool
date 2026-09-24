@@ -384,3 +384,52 @@ def test_atomic_write_bad_file_leaves_nothing(vector3, tmp_path):
     with pytest.raises(PdfToolError):
         atomic_write(vector3, dest, "doc", 99)
     assert list(dest.iterdir()) == []
+
+
+@pytest.mark.skipif(not compressor.ghostscript_available(), reason="needs Ghostscript")
+def test_ghostscript_estimate_uses_group_ratios(heavy_light, out_dir, tmp_path, monkeypatch):
+    fc = {"preset": "balanced", "advanced": {"useGhostscript": True}}
+    levels = ["light"] + [None] * 65  # overridden pages are ignored by Ghostscript: no per-page estimates
+
+    def no_estimate(*a, **k):
+        raise AssertionError("per-page override estimates are discarded in the Ghostscript branch")
+
+    monkeypatch.setattr(export_mod.estimate, "estimate", no_estimate)
+    est = run_estimate(
+        plan_for(66, levels=levels, fc=fc), {"a": {"path": str(heavy_light)}}, None, None, tmp_path / "w"
+    )
+    monkeypatch.undo()
+    actual = export(plan_for(66, fc=fc), heavy_light, out_dir, tmp_path)["resultSize"]
+    assert abs(est["estimatedBytes"] - actual) <= 0.35 * actual
+
+
+def _gs_out_of_space(*a, **k):
+    raise PdfToolError("internal", "Ghostscript lỗi: **** Error: No space left on device")
+
+
+def test_ghostscript_out_of_space_is_disk_full(tiny, out_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(compressor, "ghostscript", _gs_out_of_space)
+    with pytest.raises(PdfToolError) as e:
+        export(plan_for(2, fc={"advanced": {"useGhostscript": True}}), tiny, out_dir, tmp_path)
+    assert e.value.code == "disk_full"
+
+
+def test_ghostscript_fallback_out_of_space_is_disk_full(tiny, out_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(compressor, "ghostscript_available", lambda: True)
+    monkeypatch.setattr(compressor, "ghostscript", _gs_out_of_space)
+    with pytest.raises(PdfToolError) as e:
+        export(plan_for(2, fc={"targetMB": 0.001}), tiny, out_dir, tmp_path)
+    assert e.value.code == "disk_full"
+
+
+@pytest.mark.parametrize("factor, ok", [(4.9, False), (5.1, True)])
+def test_same_volume_needs_five_times_source(factor, ok, vector3, out_dir, tmp_path, monkeypatch):
+    size = vector3.stat().st_size
+    real = export_mod.shutil.disk_usage
+    monkeypatch.setattr(export_mod.shutil, "disk_usage", lambda p: real(p)._replace(free=int(factor * size)))
+    if ok:
+        assert export(plan_for(3), vector3, out_dir, tmp_path)["outputs"]
+    else:
+        with pytest.raises(PdfToolError) as e:
+            export(plan_for(3), vector3, out_dir, tmp_path)
+        assert e.value.code == "disk_full"

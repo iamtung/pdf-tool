@@ -22,6 +22,7 @@ SPLIT_FILL = 0.95
 MB = 1_000_000
 DEST_FREE_FACTOR = 2    # spec §7: >= 2x the source size free at the destination
 WORK_FREE_FACTOR = 3    # assembled + compressed passes + parts live in the workdir
+# Same volume for both: DEST_FREE_FACTOR + WORK_FREE_FACTOR (= 5x) on that volume.
 DEST_MANIFEST = "dest-tmp.txt"
 
 DISK_FULL_MSG = "Ổ đĩa không đủ chỗ trống để xuất file."
@@ -135,6 +136,17 @@ def cleanup_dest_tmp(workdir: Path) -> list[Path]:
 def _check_space(path: Path, need: int) -> None:
     if shutil.disk_usage(path).free < need:
         raise PdfToolError("disk_full", DISK_FULL_MSG)
+
+
+def _ghostscript(src: Path, out: Path, settings: ImageSettings | None = None) -> None:
+    """compressor.ghostscript, with an out-of-space failure reported as disk_full."""
+    try:
+        compressor.ghostscript(src, out, settings)
+    except PdfToolError as e:
+        if e.code != "disk_full" and "No space left" in e.message:
+            out.unlink(missing_ok=True)
+            raise PdfToolError("disk_full", DISK_FULL_MSG) from e
+        raise
 
 
 def _is_disk_full(e: BaseException) -> bool:
@@ -273,13 +285,15 @@ def compress_to_target(
         elif ran_last and compressor.ghostscript_available():
             gs_out = workdir / "target-gs.pdf"
             try:
-                compressor.ghostscript(src, gs_out)
+                _ghostscript(src, gs_out)
                 if fs.strip_metadata:
                     gs_out = _strip_metadata(gs_out, workdir / "target-gs-clean.pdf")
                 if gs_out.stat().st_size < result.path.stat().st_size:
                     result.path = gs_out
                     result.notes.append("Đã dùng Ghostscript /screen để nén mạnh nhất.")
-            except PdfToolError:
+            except PdfToolError as e:
+                if e.code == "disk_full":
+                    raise
                 result.notes.append(GS_FAILED_NOTE)
     _set_target(result, target)
     return result
@@ -294,7 +308,7 @@ def compress(plan: Plan, src: Path, workdir: Path, progress=None) -> Compressed 
         return None
     if fs is not None and fs.use_ghostscript:
         out = workdir / "gs.pdf"
-        compressor.ghostscript(src, out, fs.image)
+        _ghostscript(src, out, fs.image)
         if fs.strip_metadata:
             out = _strip_metadata(out, workdir / "gs-clean.pdf")
         c = Compressed(path=out, level=fs.image)
@@ -365,8 +379,11 @@ def _run_export(plan: Plan, sources: Sources, opts: ExportOptions, workdir: Path
     original_size = sum(Path(sources[d]["path"]).stat().st_size for d in used)
     opts.dest_dir.mkdir(parents=True, exist_ok=True)
     workdir.mkdir(parents=True, exist_ok=True)
-    _check_space(opts.dest_dir, DEST_FREE_FACTOR * original_size)
-    _check_space(workdir, WORK_FREE_FACTOR * original_size)
+    if os.stat(opts.dest_dir).st_dev == os.stat(workdir).st_dev:
+        _check_space(workdir, (DEST_FREE_FACTOR + WORK_FREE_FACTOR) * original_size)
+    else:
+        _check_space(opts.dest_dir, DEST_FREE_FACTOR * original_size)
+        _check_space(workdir, WORK_FREE_FACTOR * original_size)
     manifest = workdir / DEST_MANIFEST
 
     assembled = workdir / "assembled.pdf"
@@ -454,23 +471,28 @@ def run_estimate(plan: Plan, sources: Sources, page_ids: list[str] | None, level
         est = estimate.estimate(assembled, sizes, all_pages, LEVELS[level], workdir)
         return {"originalBytes": original, "estimatedBytes": est}
 
-    overrides = page_overrides(plan)
     fs = resolve_file(plan.fileCompression)
+    result = {"originalBytes": original}
+    if fs is not None and fs.use_ghostscript:
+        # Ghostscript rewrites the whole file uniformly: per-page levels don't apply.
+        sample = estimate.prepare(assembled, sizes, all_pages, workdir)
+        try:
+            ratios = sample.group_ratios(("gs", fs.image), lambda raw, out: _ghostscript(raw, out, fs.image))
+        finally:
+            sample.close()
+        result["estimatedBytes"] = sample.apply(ratios)
+        if fs.target_bytes is not None:
+            result["targetMet"] = result["estimatedBytes"] <= fs.target_bytes
+        return result
+
+    overrides = page_overrides(plan)
     groups: dict[ImageSettings, list[int]] = {}
     free = [i for i in all_pages if i not in overrides]
     for i, s in overrides.items():
         groups.setdefault(s, []).append(i)
     est = sum(estimate.estimate(assembled, sizes, pages, s, workdir) for s, pages in groups.items())
-    result = {"originalBytes": original}
     if fs is None:
         est += sum(sizes[i] for i in free)
-    elif fs.use_ghostscript:
-        raw, packed = workdir / "gs-raw.pdf", workdir / "gs-packed.pdf"
-        sample = estimate.sample_indices(sizes, all_pages)
-        estimate.extract(assembled, sample, raw)
-        compressor.ghostscript(raw, packed, fs.image)
-        ratio = min(packed.stat().st_size / max(raw.stat().st_size, 1), 1.0)
-        est = int(ratio * original)
     elif fs.target_bytes is not None:
         budget = TARGET_BUDGET * fs.target_bytes - est
         sample = estimate.prepare(assembled, sizes, free, workdir)

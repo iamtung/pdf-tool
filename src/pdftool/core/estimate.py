@@ -74,23 +74,34 @@ class Sample:
     raw_sizes: list[int]
     _cache: dict = field(default_factory=dict)
 
-    def ratios(self, settings: ImageSettings) -> tuple[float, float]:
-        if settings not in self._cache:
+    def group_ratios(self, key, run) -> tuple[float, float]:
+        """(heavy, spread) ratios after `run(raw, out)` rewrites the sample; cached by `key`."""
+        if key not in self._cache:
             packed = self.raw.with_name(self.raw.stem.replace("sample-raw-", "sample-packed-", 1) + ".pdf")
-            compressor.optimize(self.raw, packed, [settings] * len(self.raw_sizes))
-            psizes = measure_sizes(packed)
-            packed.unlink(missing_ok=True)
+            try:
+                run(self.raw, packed)
+                psizes = measure_sizes(packed)
+            finally:
+                packed.unlink(missing_ok=True)
             heavy = _ratio(sum(psizes[p] for p in self.heavy_pos), sum(self.raw_sizes[p] for p in self.heavy_pos))
             spread = (
                 _ratio(sum(psizes[p] for p in self.spread_pos), sum(self.raw_sizes[p] for p in self.spread_pos))
                 if self.spread_pos else heavy
             )
-            self._cache[settings] = (heavy, spread)
-        return self._cache[settings]
+            self._cache[key] = (heavy, spread)
+        return self._cache[key]
+
+    def ratios(self, settings: ImageSettings) -> tuple[float, float]:
+        return self.group_ratios(
+            settings, lambda raw, out: compressor.optimize(raw, out, [settings] * len(self.raw_sizes))
+        )
+
+    def apply(self, ratios: tuple[float, float]) -> int:
+        heavy, spread = ratios
+        return int(heavy * self.heavy_bytes + spread * self.rest_bytes)
 
     def estimate(self, settings: ImageSettings) -> int:
-        heavy, spread = self.ratios(settings)
-        return int(heavy * self.heavy_bytes + spread * self.rest_bytes)
+        return self.apply(self.ratios(settings))
 
     def close(self) -> None:
         """Remove the raw sample file (cached ratios stay usable)."""
@@ -115,13 +126,6 @@ def prepare(src: Path, sizes: list[int], pages: list[int], workdir: Path) -> Sam
         heavy_bytes=heavy_bytes, rest_bytes=sum(sizes[i] for i in pages) - heavy_bytes,
         raw_sizes=measure_sizes(raw),
     )
-
-
-def compression_ratio(src: Path, indices: list[int], settings: ImageSettings, workdir: Path) -> float:
-    """Overall compressed/uncompressed ratio for the given pages of src."""
-    sizes = measure_sizes(src)
-    total = sum(sizes[i] for i in indices)
-    return _ratio(estimate(src, sizes, indices, settings, workdir), total)
 
 
 def estimate(src: Path, sizes: list[int], pages: list[int], settings: ImageSettings, workdir: Path) -> int:
