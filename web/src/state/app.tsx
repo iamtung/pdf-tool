@@ -1,15 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { ApiError, api } from "../api/client";
-import type { DocInfo, Health } from "../api/types";
+import type { DocInfo, Health, Plan, SplitOption } from "../api/types";
 import { initialState, pruneRecord, pruneSet, reducer, type Action, type EditorState } from "./plan";
+
+/** What an export writes: every page, or only `onlyIds`; optionally split into several files. */
+export interface ExportContext {
+  onlyIds?: string[];
+  split?: SplitOption | null;
+}
 
 export type DialogState =
   | { kind: "none" }
-  | { kind: "compress" }
+  | ({ kind: "compress" } & ExportContext)
   | { kind: "insert"; at: number }
-  | { kind: "split"; ranges?: string; maxMB?: number }
-  | { kind: "export"; split?: import("../api/types").SplitOption | null; onlyIds?: string[] }
-  | { kind: "result"; jobId: string; plan: import("../api/types").Plan }
+  | { kind: "split"; ranges?: string; maxMB?: number; onlyIds?: string[] }
+  | ({ kind: "export" } & ExportContext)
+  | ({ kind: "result"; jobId: string; plan: Plan } & ExportContext)
   | { kind: "changed"; path: string }
   | { kind: "error"; message: string };
 
@@ -36,8 +42,13 @@ interface AppContextValue {
   prompt: PasswordPrompt | null;
   estimates: Record<string, number>;
   setEstimates: (f: (e: Record<string, number>) => Record<string, number>) => void;
-  /** Open a PDF, asking for a password if needed. primary=true resets the editor. */
-  openPath: (path: string, primary: boolean) => Promise<DocInfo | null>;
+  /**
+   * Open a PDF, asking for a password if needed. primary=true resets the editor.
+   * Returns null on failure or password cancel; errors go to `onError` if given, else showError.
+   */
+  openPath: (path: string, primary: boolean, onError?: (e: unknown) => void) => Promise<DocInfo | null>;
+  /** Close a secondary doc on the server and drop it from `docs` (it must not be used by the plan). */
+  forgetDoc: (docId: string) => void;
   showError: (e: unknown, path?: string) => void;
 }
 
@@ -75,7 +86,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setDialog({ kind: "error", message: e instanceof Error ? e.message : String(e) });
   }, [docs, primaryId]);
 
-  const openPath = useCallback(async (path: string, primary: boolean): Promise<DocInfo | null> => {
+  const openPath = useCallback(async (path: string, primary: boolean, onError?: (e: unknown) => void): Promise<DocInfo | null> => {
     let password: string | undefined;
     let wrong = false;
     for (;;) {
@@ -106,16 +117,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
           password = pw;
           continue;
         }
-        showError(e, path);
+        if (onError) onError(e);
+        else showError(e, path);
         return null;
       }
     }
   }, [showError]);
 
+  const forgetDoc = useCallback((docId: string) => {
+    api.closeDoc(docId).catch(() => {});
+    setDocs((d) => {
+      if (!(docId in d)) return d;
+      const next = { ...d };
+      delete next[docId];
+      return next;
+    });
+  }, []);
+
   const value: AppContextValue = {
     editor, dispatch, docs, primary: primaryId ? docs[primaryId] ?? null : null,
     health, setHealth, selected, setSelected, currentId, setCurrentId, dialog, setDialog, prompt,
-    estimates, setEstimates, openPath, showError,
+    estimates, setEstimates, openPath, forgetDoc, showError,
   };
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

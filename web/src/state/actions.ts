@@ -2,15 +2,25 @@ import { api } from "../api/client";
 import type { Plan, SplitOption } from "../api/types";
 import { useApp } from "./app";
 
-/** Start an export job and show the result dialog. */
+/**
+ * Start an export job and show the result dialog. `onlyIds`/`split` are forwarded to the result
+ * dialog so it knows whether the whole document was written (markSaved) and can offer follow-ups.
+ * Resolves true when the job was started.
+ */
 export function useStartExport() {
   const { setDialog, showError } = useApp();
-  return async (plan: Plan, opts: { destDir?: string | null; split?: SplitOption | null } = {}) => {
+  return async (
+    plan: Plan,
+    opts: { destDir?: string | null; split?: SplitOption | null; onlyIds?: string[] } = {},
+  ): Promise<boolean> => {
+    const { onlyIds, ...req } = opts;
     try {
-      const { jobId } = await api.exportPlan(plan, opts);
-      setDialog({ kind: "result", jobId, plan });
+      const { jobId } = await api.exportPlan(plan, req);
+      setDialog({ kind: "result", jobId, plan, onlyIds, split: opts.split ?? null });
+      return true;
     } catch (e) {
       showError(e);
+      return false;
     }
   };
 }

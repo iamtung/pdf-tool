@@ -17,8 +17,14 @@ export function displaySize(page: PlanPage, docs: Record<string, DocInfo>) {
   return page.rotate % 180 ? { width: height, height: width } : { width, height };
 }
 
-/** Default "insert blank page" size: the neighbour page, or A4. */
-export function neighbourSize(pages: PlanPage[], at: number, docs: Record<string, DocInfo>) {
-  const ref = pages[at - 1] ?? pages[at];
+/**
+ * Default "insert blank page" size for an insert at index `at`: the reference page the user
+ * named (page X for "before page X" = pages[at], for "after page X" = pages[at - 1]),
+ * falling back to the other neighbour, or A4.
+ */
+export function neighbourSize(
+  pages: PlanPage[], at: number, docs: Record<string, DocInfo>, where: "before" | "after" = "after",
+) {
+  const ref = where === "before" ? pages[at] ?? pages[at - 1] : pages[at - 1] ?? pages[at];
   return ref ? displaySize(ref, docs) : { width: 595, height: 842 };
 }

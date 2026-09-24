@@ -22,15 +22,15 @@ function MainDialog() {
   const close = () => setDialog({ kind: "none" });
   switch (dialog.kind) {
     case "compress":
-      return <CompressDialog />;
+      return <CompressDialog onlyIds={dialog.onlyIds} split={dialog.split} />;
     case "insert":
       return <InsertDialog at={dialog.at} />;
     case "split":
-      return <SplitDialog ranges={dialog.ranges} maxMB={dialog.maxMB} />;
+      return <SplitDialog ranges={dialog.ranges} maxMB={dialog.maxMB} onlyIds={dialog.onlyIds} />;
     case "export":
       return <ExportDialog split={dialog.split ?? null} onlyIds={dialog.onlyIds} />;
     case "result":
-      return <ResultDialog jobId={dialog.jobId} plan={dialog.plan} />;
+      return <ResultDialog jobId={dialog.jobId} plan={dialog.plan} onlyIds={dialog.onlyIds} split={dialog.split} />;
     case "changed":
       return (
         <Modal title="File đã thay đổi" onClose={close}

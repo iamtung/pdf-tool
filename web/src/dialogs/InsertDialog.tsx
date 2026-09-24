@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { DocInfo } from "../api/types";
 import { neighbourSize } from "../lib/pages";
@@ -15,7 +15,7 @@ function ImagePreview({ path }: { path: string }) {
 }
 
 export default function InsertDialog({ at }: { at: number }) {
-  const { editor, dispatch, docs, setDialog, openPath, showError } = useApp();
+  const { editor, dispatch, docs, setDialog, openPath, forgetDoc } = useApp();
   const pages = editor.plan.pages;
   const n = pages.length;
   const [kind, setKind] = useState<Kind>("pdf");
@@ -28,18 +28,40 @@ export default function InsertDialog({ at }: { at: number }) {
   const [error, setError] = useState<string | null>(null);
   const close = () => setDialog({ kind: "none" });
 
+  // The extra PDF is opened on the server as soon as it is picked; if it never gets inserted
+  // (cancel, another file picked, dialog replaced) close it again so it doesn't leak.
+  const pendingDoc = useRef<string | null>(null);
+  const forgetRef = useRef(forgetDoc);
+  forgetRef.current = forgetDoc;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (pendingDoc.current) forgetRef.current(pendingDoc.current);
+      pendingDoc.current = null;
+    };
+  }, []);
+
   const index = n === 0 ? 0 : where === "before" ? pageNo - 1 : pageNo;
   const chooseDoc = async () => {
+    setError(null);
     try {
       const { paths } = await api.pickFiles("pdf");
       if (!paths[0]) return;
-      const doc = await openPath(paths[0], false);
+      const doc = await openPath(paths[0], false, (e) => setError(e instanceof Error ? e.message : String(e)));
+      if (doc && !mounted.current) {
+        forgetDoc(doc.docId); // dialog went away while the file was opening
+        return;
+      }
       if (doc) {
+        if (pendingDoc.current && pendingDoc.current !== doc.docId) forgetDoc(pendingDoc.current);
+        pendingDoc.current = doc.docId;
         setSrcDoc(doc);
         setPicked(new Set(Array.from({ length: doc.pageCount }, (_, i) => i)));
       }
     } catch (e) {
-      showError(e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
   const chooseImages = async () => {
@@ -47,7 +69,7 @@ export default function InsertDialog({ at }: { at: number }) {
       const { paths } = await api.pickFiles("image", true);
       if (paths.length) setImages(paths);
     } catch (e) {
-      showError(e);
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
   const togglePage = (i: number) => {
@@ -63,7 +85,7 @@ export default function InsertDialog({ at }: { at: number }) {
     } else if (kind === "image") {
       added = images.map((path) => ({ source: { type: "image", path }, rotate: 0, compress: null }));
     } else if (kind === "blank") {
-      const size = neighbourSize(pages, index, docs);
+      const size = neighbourSize(pages, index, docs, where);
       added = Array.from({ length: blankCount }, () => ({ source: { type: "blank", ...size }, rotate: 0, compress: null }));
     }
     if (!added.length) {
@@ -74,6 +96,7 @@ export default function InsertDialog({ at }: { at: number }) {
       setError(`Số trang phải từ 1 đến ${n}.`);
       return;
     }
+    if (kind === "pdf") pendingDoc.current = null; // now referenced by the plan: keep it open
     dispatch({ type: "insert", pages: added, at: index });
     setDialog({ kind: "none" });
   };
