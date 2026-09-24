@@ -6,9 +6,17 @@ import pytest
 from pdftool.jobs import JobManager
 
 
+@pytest.fixture(autouse=True)
+def allow_test_tasks(monkeypatch):
+    # spawned workers inherit os.environ, so this must be set before submit()
+    monkeypatch.setenv("PDFTOOL_ALLOW_TEST_TASKS", "1")
+
+
 @pytest.fixture
 def manager():
-    return JobManager()
+    m = JobManager()
+    yield m
+    m.shutdown()
 
 
 def test_analysis_job_runs_in_process(manager, mixed, pdftool_home):
@@ -167,7 +175,7 @@ def test_unexpected_error_message(manager):
 
 def test_dedup_key_is_not_a_job_id(manager):
     job = manager.submit("tests.helpers:quick", {"delay": 1.0}, key="fp9")
-    assert manager.get(f"tests.helpers:quick:fp9") is None
+    assert manager.get("tests.helpers:quick:fp9") is None
     assert manager.find_active("tests.helpers:quick", "fp9") is job
     assert manager.get(job.id) is job
     manager.wait(job.id)
@@ -179,3 +187,41 @@ def test_finished_jobs_are_pruned(manager):
     old._finished_at -= 31 * 60
     manager.submit("tests.helpers:quick", {})
     assert manager.get(old.id) is None
+
+
+def test_test_kinds_need_opt_in(manager, monkeypatch):
+    monkeypatch.delenv("PDFTOOL_ALLOW_TEST_TASKS")
+    job = manager.wait(manager.submit("tests.helpers:quick", {}).id)
+    assert job.status == "failed"
+    assert job.error["code"] == "internal"
+    job = manager.wait(manager.submit("nope", {}).id)
+    assert job.status == "failed" and job.error["code"] == "internal"
+
+
+def test_shutdown_cleans_up_before_returning(manager, tmp_path, pdftool_home):
+    job, child = _start_sleeper(manager, tmp_path)
+    workdir = pdftool_home / "tmp" / f"job-{job.id}"
+    workdir.mkdir(parents=True, exist_ok=True)
+    partial = tmp_path / "out" / "x_compressed.abcd.tmp.pdf"
+    partial.parent.mkdir()
+    partial.write_bytes(b"partial")
+    (workdir / "dest-tmp.txt").write_text(f"{partial}\n", encoding="utf-8")
+    manager.shutdown()
+    assert not partial.exists()
+    assert not workdir.exists()
+    assert _wait_for(lambda: not _pid_alive(child), 3)
+
+
+def test_sweep_stale_removes_leftover_workdirs(tmp_path, pdftool_home):
+    stale = pdftool_home / "tmp" / "job-deadbeef0000"
+    stale.mkdir(parents=True)
+    partial = tmp_path / "x_compressed.1234.tmp.pdf"
+    partial.write_bytes(b"partial")
+    keep = tmp_path / "x_compressed.pdf"
+    keep.write_bytes(b"final")
+    (stale / "dest-tmp.txt").write_text(f"{partial}\n{keep}\n", encoding="utf-8")
+    (pdftool_home / "tmp" / "unrelated").mkdir()
+    m = JobManager()
+    assert m.sweep_stale() == [stale]
+    assert not stale.exists() and not partial.exists()
+    assert keep.exists() and (pdftool_home / "tmp" / "unrelated").exists()

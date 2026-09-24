@@ -20,6 +20,7 @@ import uuid
 import weakref
 from dataclasses import dataclass, field
 from multiprocessing.connection import wait as mp_wait
+from pathlib import Path
 
 from pdftool import paths
 
@@ -28,6 +29,8 @@ TERMINAL = {"done", "failed", "cancelled"}
 _KEEP_FINISHED_S = 30 * 60
 _MAX_JOBS = 200
 _TERM_GRACE_S = 1.0
+_SHUTDOWN_JOIN_S = 2.0  # per job
+_SHUTDOWN_TOTAL_S = 10.0
 
 
 @dataclass
@@ -43,6 +46,7 @@ class Job:
     _proc: mp.Process | None = field(default=None, repr=False)
     _cancel: bool = field(default=False, repr=False)
     _finished_at: float | None = field(default=None, repr=False)
+    _thread: threading.Thread | None = field(default=None, repr=False)
 
     def public(self) -> dict:
         return {
@@ -53,24 +57,37 @@ class Job:
 
 
 def _resolve_task(kind: str):
-    """Look up a worker entry point. ``module:function`` kinds are for tests only."""
+    """Look up a worker entry point.
+
+    ``module:function`` kinds are for tests only and need ``PDFTOOL_ALLOW_TEST_TASKS=1``.
+    """
     if ":" in kind:
+        if os.environ.get("PDFTOOL_ALLOW_TEST_TASKS") != "1":
+            raise ValueError(f"unknown job kind {kind!r}")
         import importlib
 
         mod, _, name = kind.partition(":")
         return getattr(importlib.import_module(mod), name)
     from pdftool.tasks import TASKS
 
+    if kind not in TASKS:
+        raise ValueError(f"unknown job kind {kind!r}")
     return TASKS[kind]
 
 
 def _worker(kind: str, args: dict, conn) -> None:
     os.setpgrp()  # own process group: cancel() kills us and our children together
+    parent = os.getppid()
     from pdftool.core.errors import PdfToolError
+
+    def progress(f, m=""):
+        if os.getppid() != parent:  # server died without cancelling us: stop working
+            os._exit(1)
+        conn.send(("progress", float(f), m))
 
     try:
         fn = _resolve_task(kind)
-        result = fn(args, lambda f, m="": conn.send(("progress", float(f), m)))
+        result = fn(args, progress)
         conn.send(("done", result))
     except PdfToolError as e:
         conn.send(("error", {"code": e.code, "message": e.message}))
@@ -138,8 +155,34 @@ class JobManager:
             self._jobs[job.id] = job
             if key:
                 self._active[f"{kind}:{key}"] = job.id
-        threading.Thread(target=self._run, args=(job, args, exclusive, workdir), daemon=True).start()
+        job._thread = threading.Thread(target=self._run, args=(job, args, exclusive, workdir), daemon=True)
+        job._thread.start()
         return job
+
+    def sweep_stale(self) -> list[Path]:
+        """Remove leftovers of jobs from a previous server run (e.g. after SIGKILL).
+
+        Call once at startup, before any job is submitted: every ``tmp/job-*`` dir is
+        treated as stale. Partial destination files listed in its manifest are deleted too.
+        """
+        from pdftool.core.export import cleanup_dest_tmp
+
+        root = paths.tmp_dir()
+        if not root.is_dir():
+            return []
+        with self._lock:
+            live = {f"job-{j.id}" for j in self._jobs.values() if j.status not in TERMINAL}
+        removed = []
+        for d in root.glob("job-*"):
+            if not d.is_dir() or d.name in live:
+                continue
+            try:
+                cleanup_dest_tmp(d)
+            except OSError:
+                pass
+            shutil.rmtree(d, ignore_errors=True)
+            removed.append(d)
+        return removed
 
     def _prune(self) -> None:
         """Forget finished jobs older than 30 minutes; cap the table at ~_MAX_JOBS."""
@@ -252,9 +295,16 @@ class JobManager:
     def shutdown(self) -> None:
         """Cancel every unfinished job and kill its process group (FastAPI lifespan / atexit)."""
         with self._lock:
-            ids = [j.id for j in self._jobs.values() if j.status not in TERMINAL]
-        for job_id in ids:
-            self.cancel(job_id)
+            jobs = [j for j in self._jobs.values() if j.status not in TERMINAL]
+        for job in jobs:
+            self.cancel(job.id)
+        # Let each watcher run its cleanup (dest tmp files, workdir) before we exit.
+        deadline = time.monotonic() + _SHUTDOWN_TOTAL_S
+        for job in jobs:
+            t = job._thread
+            remaining = deadline - time.monotonic()
+            if t is not None and t is not threading.current_thread() and remaining > 0:
+                t.join(timeout=min(_SHUTDOWN_JOIN_S, remaining))
 
     def wait(self, job_id: str, timeout: float = 120) -> Job:
         """Block until the job finishes (used by tests)."""
