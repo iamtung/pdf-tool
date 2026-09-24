@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DocInfo } from "../api/types";
-import { HISTORY_LIMIT, countOverrides, initialState, reducer, type EditorState } from "./plan";
+import { HISTORY_LIMIT, countOverrides, initialState, pruneRecord, pruneSet, reducer, type EditorState } from "./plan";
 
 const doc = (n: number): DocInfo => ({
   docId: "d1", name: "a.pdf", path: "/a.pdf", uploaded: false, repaired: false, size: 1, pageCount: n,
@@ -83,5 +83,21 @@ describe("plan reducer", () => {
     const s0 = loaded(2);
     const s = reducer(reducer(s0, { type: "delete", ids: ids(s0, 0) }), { type: "markSaved" });
     expect(s.dirty).toBe(false);
+  });
+});
+
+describe("pruneSet / pruneRecord", () => {
+  const alive = new Set(["a", "b"]);
+  it("returns the same Set when every id is alive", () => {
+    const s = new Set(["a"]);
+    expect(pruneSet(s, alive)).toBe(s);
+  });
+  it("drops dead ids", () => {
+    expect([...pruneSet(new Set(["a", "x", "b"]), alive)]).toEqual(["a", "b"]);
+  });
+  it("returns the same record when every key is alive, else a pruned copy", () => {
+    const r = { a: 1, b: 2 };
+    expect(pruneRecord(r, alive)).toBe(r);
+    expect(pruneRecord({ a: 1, x: 3 }, alive)).toEqual({ a: 1 });
   });
 });

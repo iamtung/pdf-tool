@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAnalysis, useEstimate } from "../api/hooks";
-import type { Level } from "../api/types";
+import type { Level, Plan } from "../api/types";
 import { KIND_LABEL, LEVEL_LABEL, formatBytes, paperName } from "../lib/format";
 import { displaySize } from "../lib/pages";
 import { useApp } from "../state/app";
@@ -22,17 +22,33 @@ function PageInfo() {
   const { report } = useAnalysis(page?.source.type === "pdf" ? page.source.docId : null);
   const [level, setLevel] = useState<Level>(page?.compress ?? "medium");
   useEffect(() => setLevel(page?.compress ?? "medium"), [page?.id, page?.compress]);
-  const est = useEstimate(editor.plan, targets, level, targets.length > 0);
+  const targetPages = editor.plan.pages.filter((p) => targets.includes(p.id));
+  const allBlank = targetPages.length > 0 && targetPages.every((p) => p.source.type === "blank");
+  // Only what affects the estimate goes into the key: the target pages, without their current
+  // level (Áp dụng changes it) and without file compression (the page level overrides it).
+  const estPlan: Plan = { pages: targetPages.map((p) => ({ ...p, compress: null })), fileCompression: null };
+  const est = useEstimate(estPlan, targets, level, targets.length > 0 && !allBlank);
   if (!page) return null;
 
   const size = displaySize(page, docs);
-  const anyOverride = editor.plan.pages.some((p) => targets.includes(p.id) && p.compress);
+  const anyOverride = targetPages.some((p) => p.compress);
+  const dropEstimates = () => setEstimates((e) => {
+    const next = { ...e };
+    for (const id of targets) delete next[id];
+    return next;
+  });
   const apply = () => {
     dispatch({ type: "setCompress", ids: targets, level });
     if (est.result) {
       const share = est.result.estimatedBytes / targets.length;
       setEstimates((e) => ({ ...e, ...Object.fromEntries(targets.map((id) => [id, share])) }));
+    } else {
+      dropEstimates(); // an old estimate would belong to a different level
     }
+  };
+  const clearLevel = () => {
+    dispatch({ type: "setCompress", ids: targets, level: null });
+    dropEstimates();
   };
 
   return (
@@ -63,6 +79,12 @@ function PageInfo() {
           </div>
         )}
       </section>
+      {allBlank ? (
+        <section>
+          <h3>Nén</h3>
+          <div className="small muted">Trang trắng — không có gì để nén.</div>
+        </section>
+      ) : (
       <section>
         <h3>Nén {targets.length > 1 ? `${targets.length} trang` : "trang này"}</h3>
         <div className="chips">
@@ -82,9 +104,10 @@ function PageInfo() {
         )}
         <div className="row" style={{ marginTop: 8 }}>
           <button className="primary" style={{ flex: 1 }} onClick={apply}>Áp dụng</button>
-          {anyOverride && <button onClick={() => dispatch({ type: "setCompress", ids: targets, level: null })}>Bỏ mức riêng</button>}
+          {anyOverride && <button onClick={clearLevel}>Bỏ mức riêng</button>}
         </div>
       </section>
+      )}
     </>
   );
 }

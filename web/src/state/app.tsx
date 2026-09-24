@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useReducer, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { ApiError, api } from "../api/client";
 import type { DocInfo, Health } from "../api/types";
-import { initialState, reducer, type Action, type EditorState } from "./plan";
+import { initialState, pruneRecord, pruneSet, reducer, type Action, type EditorState } from "./plan";
 
 export type DialogState =
   | { kind: "none" }
@@ -55,6 +55,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [dialog, setDialog] = useState<DialogState>({ kind: "none" });
   const [prompt, setPrompt] = useState<PasswordPrompt | null>(null);
   const [estimates, setEstimates] = useState<Record<string, number>>({});
+
+  // Undo/redo/delete can remove pages: forget selection, current page and estimates for them.
+  const planPages = editor.plan.pages;
+  useEffect(() => {
+    const alive = new Set(planPages.map((p) => p.id));
+    setSelected((s) => pruneSet(s, alive));
+    setCurrentId((c) => (c && !alive.has(c) ? null : c));
+    setEstimates((e) => pruneRecord(e, alive));
+  }, [planPages]);
 
   const showError = useCallback((e: unknown, path?: string) => {
     if (e instanceof ApiError && e.code === "file_changed") {

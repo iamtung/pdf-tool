@@ -120,3 +120,16 @@ export function reducer(state: EditorState, action: Action): EditorState {
     }
   }
 }
+
+/** Drop ids not in `alive`; returns the same Set when nothing changed (safe in setState). */
+export function pruneSet(s: Set<string>, alive: Set<string>): Set<string> {
+  for (const id of s) if (!alive.has(id)) return new Set([...s].filter((x) => alive.has(x)));
+  return s;
+}
+
+/** Drop keys not in `alive`; returns the same object when nothing changed. */
+export function pruneRecord<T>(r: Record<string, T>, alive: Set<string>): Record<string, T> {
+  const keys = Object.keys(r);
+  if (keys.every((k) => alive.has(k))) return r;
+  return Object.fromEntries(keys.filter((k) => alive.has(k)).map((k) => [k, r[k]]));
+}

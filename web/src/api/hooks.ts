@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./client";
-import type { EstimateResult, JobState, Level, Plan, Source } from "./types";
+import type { EstimateResult, JobState, Level, Plan, Report, Source } from "./types";
 
 const TERMINAL_STATUSES = ["done", "failed", "cancelled"];
 
@@ -78,24 +78,42 @@ export async function waitJob<R>(jobId: string, onProgress?: (j: JobState<R>) =>
   }
 }
 
-/** Analysis report for a document; runs the background job for large files. */
+/** Fetch the analysis report, waiting (by polling) for the background job on large files. */
+async function fetchAnalysis(
+  docId: string, onProgress: (j: JobState<unknown>) => void,
+): Promise<Report> {
+  for (let round = 0; round < 3; round++) {
+    const r = await api.analysis(docId);
+    if (r.status === "done") return r.report;
+    const job = await waitJob(r.jobId, onProgress);
+    if (job.status !== "done") throw new Error(job.error?.message ?? "Phân tích bị hủy.");
+  }
+  throw new Error("Không nhận được kết quả phân tích.");
+}
+
+/**
+ * Analysis report for a document. One shared query per docId (React Query dedups the
+ * promise), so however many components use it there is a single subscription to the job.
+ * Progress of the background job is published to the ["analysis-progress", docId] query.
+ */
 export function useAnalysis(docId: string | null) {
   const qc = useQueryClient();
   const query = useQuery({
     queryKey: ["analysis", docId],
-    queryFn: () => api.analysis(docId!),
+    queryFn: () => fetchAnalysis(docId!, (j) => qc.setQueryData(["analysis-progress", docId], j)),
     enabled: !!docId,
     staleTime: Infinity,
   });
-  const jobId = query.data?.status === "running" ? query.data.jobId : null;
-  const job = useJob(jobId);
-  useEffect(() => {
-    if (job?.status === "done") qc.invalidateQueries({ queryKey: ["analysis", docId] });
-  }, [job?.status, docId, qc]);
+  const progress = useQuery<JobState<unknown> | null>({
+    queryKey: ["analysis-progress", docId],
+    queryFn: () => null,
+    enabled: false,
+    staleTime: Infinity,
+  });
   return {
-    report: query.data?.status === "done" ? query.data.report : null,
-    job,
-    error: query.error ?? (job?.status === "failed" ? new Error(job.error?.message) : null),
+    report: query.data ?? null,
+    job: query.data ? null : progress.data ?? null,
+    error: query.error ?? null,
   };
 }
 
@@ -121,18 +139,27 @@ export function useEstimate(
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const key = enabled && plan ? JSON.stringify([plan, pageIds, level]) : null;
-  const latest = useRef<string | null>(null);
   useEffect(() => {
-    latest.current = key;
     setJobId(null);
     setError(null);
     if (!key || !plan) return;
+    let active = true;
+    let started: string | null = null;
+    const cancel = (id: string) => void api.cancelJob(id).catch(() => {});
     const t = setTimeout(() => {
       api.estimate(plan, pageIds, level)
-        .then((r) => latest.current === key && setJobId(r.jobId))
-        .catch((e) => latest.current === key && setError(e.message));
+        .then((r) => {
+          if (!active) return cancel(r.jobId); // superseded while the request was in flight
+          started = r.jobId;
+          setJobId(r.jobId);
+        })
+        .catch((e) => active && setError(e.message));
     }, delay);
-    return () => clearTimeout(t);
+    return () => {
+      active = false;
+      clearTimeout(t);
+      if (started) cancel(started); // superseded or unmounted: stop the server-side job
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   const job = useJob<EstimateResult>(jobId);

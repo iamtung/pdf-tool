@@ -29,8 +29,8 @@ export default function TopBar() {
       <div className="spacer" />
       {fc && <span className="badge">Nén: {describeFileCompression(fc)}</span>}
       <button onClick={pickAndOpen}>Mở file…</button>
-      <button className="icon" title="Hoàn tác (⌘Z)" disabled={!editor.past.length} onClick={() => dispatch({ type: "undo" })}>↶</button>
-      <button className="icon" title="Làm lại (⇧⌘Z)" disabled={!editor.future.length} onClick={() => dispatch({ type: "redo" })}>↷</button>
+      <button className="icon" title="Hoàn tác (⌘Z)" aria-label="Hoàn tác" disabled={!editor.past.length} onClick={() => dispatch({ type: "undo" })}>↶</button>
+      <button className="icon" title="Làm lại (⇧⌘Z)" aria-label="Làm lại" disabled={!editor.future.length} onClick={() => dispatch({ type: "redo" })}>↷</button>
       <button disabled={!primary || !editor.plan.pages.length} onClick={() => setDialog({ kind: "export" })}>Xuất file</button>
       <button className="primary" disabled={!primary || !editor.plan.pages.length} onClick={() => setDialog({ kind: "compress" })}>Nén toàn file</button>
     </header>

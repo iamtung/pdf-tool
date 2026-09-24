@@ -19,10 +19,13 @@ export function usePageDetail(page: PlanPage | null): PageDetail | null {
   return report.pagesDetail[page.source.index] ?? null;
 }
 
-/** Ids of the pages an action applies to: the selection, or the current page. */
+/** Ids of the pages an action applies to: the selection (plan order, existing pages only), or the current page. */
 export function useTargetIds(): string[] {
-  const { selected } = useApp();
+  const { selected, editor } = useApp();
   const { page } = useCurrentPage();
-  if (selected.size) return [...selected];
+  if (selected.size) {
+    const ids = editor.plan.pages.filter((p) => selected.has(p.id)).map((p) => p.id);
+    if (ids.length) return ids;
+  }
   return page ? [page.id] : [];
 }
