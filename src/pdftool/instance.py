@@ -28,6 +28,10 @@ def write_url(url: str) -> None:
     (paths.home() / URL_NAME).write_text(url)
 
 
+def clear_url() -> None:
+    (paths.home() / URL_NAME).unlink(missing_ok=True)
+
+
 def read_url() -> str | None:
     path = paths.home() / URL_NAME
     if not path.exists():
