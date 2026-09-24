@@ -1,5 +1,7 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { collectEstimateInputs, planDocIds } from "../lib/planDocs";
+import type { ProfileState } from "../lib/profileStatus";
 import { api } from "./client";
 import type { EstimateResult, JobState, Level, Plan, Profile, Report, Source } from "./types";
 
@@ -178,6 +180,43 @@ export function useProfileEstimate(docId: string | null) {
     job: profileState.job ?? (report ? null : analysisJob),
     error: profileState.error ?? analysisError,
   };
+}
+
+/**
+ * Analysis reports + compression profiles for every PDF document a plan references, for
+ * `estimatePlan`. Uses the same query keys/fetchers as `useAnalysis`/`useProfile`, so there is still
+ * one subscription per resource per document. `ready` means every document has a profile.
+ */
+export function usePlanEstimateInputs(plan: Plan | null) {
+  const qc = useQueryClient();
+  const docIds = useMemo(() => planDocIds(plan), [plan]);
+  const analyses = useQueries({
+    queries: docIds.map((docId) => ({
+      queryKey: ["analysis", docId],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        fetchAnalysis(docId, (j) => qc.setQueryData(["analysis-progress", docId], j), signal),
+      retry: (n: number, e: unknown) => n < 2 && !(e instanceof JobFailedError),
+      staleTime: Infinity,
+    })),
+  });
+  const profiles = useQueries({
+    queries: docIds.map((docId, i) => ({
+      queryKey: ["profile", docId],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        fetchProfile(docId, (j) => qc.setQueryData(["profile-progress", docId], j), signal),
+      enabled: !!analyses[i]?.data,
+      retry: (n: number, e: unknown) => n < 2 && !(e instanceof JobFailedError),
+      staleTime: Infinity,
+    })),
+  });
+  const inputs = collectEstimateInputs(
+    docIds,
+    analyses.map((q) => q.data ?? null),
+    profiles.map((q) => q.data ?? null),
+  );
+  const error = [...analyses, ...profiles].find((q) => q.error)?.error ?? null;
+  const status: ProfileState = inputs.ready ? "ready" : error ? "error" : "computing";
+  return { ...inputs, error, status };
 }
 
 /** Image URL for a plan page thumbnail or large view. */

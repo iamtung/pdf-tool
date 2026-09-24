@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Mail, Scale, Smartphone, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useEstimate, useProfileEstimate } from "../api/hooks";
+import { useEstimate, usePlanEstimateInputs } from "../api/hooks";
 import type { Advanced, FileCompression, Preset } from "../api/types";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,6 @@ import {
 import { estimatePlan } from "../lib/estimate";
 import { chooseEstimate } from "../lib/estimates";
 import { PRESET_LABEL, formatBytes } from "../lib/format";
-import { profileState } from "../lib/profileStatus";
 import { cn } from "../lib/utils";
 import { useApp, type ExportContext } from "../state/app";
 import { countOverrides, withFileCompression } from "../state/plan";
@@ -39,13 +38,8 @@ export default function CompressDialog({ onlyIds, split }: ExportContext) {
   const overrides = countOverrides(editor.plan);
   const scope = subsetPlan(editor.plan, onlyIds);
 
-  // Instant estimates from the precomputed profile; the server is only a fallback.
-  const firstPdf = scope.pages.find((p) => p.source.type === "pdf");
-  const estDocId = firstPdf && firstPdf.source.type === "pdf" ? firstPdf.source.docId : null;
-  const { report: estReport, profile: estProfile, error: estError } = useProfileEstimate(estDocId);
-  const reports = estDocId && estReport ? { [estDocId]: estReport } : {};
-  const profiles = estDocId && estProfile ? { [estDocId]: estProfile } : {};
-  const status = profileState(estProfile, estError);
+  // Instant estimates from the precomputed profiles of every document in the scope; else the server.
+  const { reports, profiles, status } = usePlanEstimateInputs(scope);
   const ready = status === "ready";
   const estimateFor = (compression: FileCompression | null) =>
     ready && compression && scope.pages.length
