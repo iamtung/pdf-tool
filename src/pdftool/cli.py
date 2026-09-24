@@ -37,6 +37,12 @@ def _wait_for_url() -> str | None:
         time.sleep(WAIT_FOR_URL_STEP)
 
 
+def ui_built() -> bool:
+    from pdftool import server  # create_app() reads PDFTOOL_DEV at call time, so importing early is safe
+
+    return (server.STATIC / "index.html").exists()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="pdftool", description="Công cụ phân tích, chỉnh sửa và nén PDF")
     parser.add_argument("file", nargs="?", help="file PDF mở ngay khi khởi động")
@@ -47,6 +53,13 @@ def main() -> None:
 
     if args.dev:
         os.environ["PDFTOOL_DEV"] = "1"
+    elif not ui_built():
+        print(
+            "Chưa build giao diện web. Chạy lệnh sau rồi thử lại:\n"
+            "    cd web && npm install && npm run build",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     lock = instance.acquire()
     if lock is None:

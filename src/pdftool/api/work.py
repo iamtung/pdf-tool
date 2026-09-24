@@ -1,6 +1,7 @@
 """Plan-level endpoints: render plan pages, estimate, export."""
 import re
 from pathlib import Path
+from typing import Annotated, Literal, Union
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
@@ -29,11 +30,24 @@ class EstimateRequest(BaseModel):
     level: Level | None = None
 
 
+class SplitRanges(BaseModel):
+    mode: Literal["ranges"]
+    ranges: str
+
+
+class SplitSize(BaseModel):
+    mode: Literal["size"]
+    maxMB: float = Field(gt=0, allow_inf_nan=False)
+
+
+Split = Annotated[Union[SplitRanges, SplitSize], Field(discriminator="mode")]
+
+
 class ExportRequest(BaseModel):
     plan: Plan
     destDir: str | None = None
     baseName: str | None = None
-    split: dict | None = None
+    split: Split | None = None
 
 
 def safe_base_name(name: str | None) -> str:
@@ -82,6 +96,6 @@ def export(req: ExportRequest, reg: Registry = Depends(registry), jm: JobManager
     base = safe_base_name(req.baseName) or safe_base_name(default) or "pages"
     job = jm.submit("export", {
         "plan": req.plan.model_dump(), "sources": sources, "destDir": str(dest), "baseName": base,
-        "split": req.split,
+        "split": req.split.model_dump() if req.split else None,
     }, exclusive=True)
     return {"jobId": job.id}

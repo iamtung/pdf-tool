@@ -1,5 +1,5 @@
 """Page plan model and compression-level resolution (spec §4.4, §4.5, §4.6)."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator
@@ -97,6 +97,7 @@ class FileSettings:
     target_bytes: int | None
     use_ghostscript: bool
     strip_metadata: bool
+    grayscale_scans: bool | None = None  # explicit advanced override; None = each level's default
 
 
 def resolve_file(fc: FileCompression | None) -> FileSettings | None:
@@ -120,7 +121,15 @@ def resolve_file(fc: FileCompression | None) -> FileSettings | None:
         target_bytes=int(target_mb * MB) if target_mb is not None else None,
         use_ghostscript=adv.useGhostscript,
         strip_metadata=adv.stripMetadata,
+        grayscale_scans=adv.grayscaleScans,
     )
+
+
+def target_ladder(fs: FileSettings) -> list[ImageSettings]:
+    """Ladder rungs for target mode, with an explicit grayscaleScans choice applied to every rung."""
+    if fs.grayscale_scans is None:
+        return LADDER
+    return [replace(r, grayscale_scans=fs.grayscale_scans) for r in LADDER]
 
 
 def page_overrides(plan: Plan) -> dict[int, ImageSettings]:

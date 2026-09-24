@@ -6,7 +6,7 @@ import ThumbnailStrip from "./components/ThumbnailStrip";
 import TopBar from "./components/TopBar";
 import Dialogs from "./dialogs/Dialogs";
 import { isModalOpen } from "./dialogs/Modal";
-import { usePickAndOpen, useOpenDropped } from "./state/actions";
+import { confirmDiscard, usePickAndOpen, useOpenDropped } from "./state/actions";
 import { useApp } from "./state/app";
 import { useCurrentPage, useTargetIds } from "./state/selectors";
 
@@ -27,7 +27,7 @@ export default function App() {
     const path = new URLSearchParams(window.location.search).get("open");
     if (path) {
       window.history.replaceState(null, "", "/");
-      openPath(path, true);
+      if (!primary || confirmDiscard(editor.dirty)) openPath(path, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

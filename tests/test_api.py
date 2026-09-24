@@ -360,3 +360,26 @@ def test_export_long_base_name_truncated(client, vector3):
     out = job["result"]["outputs"][0]["path"]
     stem = out.rsplit("/", 1)[1].removesuffix("_edited.pdf")
     assert len(stem.encode()) <= 200 and LONG_VN.startswith(stem)
+
+
+@pytest.mark.parametrize("split", [
+    {"mode": "pages"},
+    {"mode": "size"},
+    {"mode": "size", "maxMB": 0},
+    {"mode": "size", "maxMB": -1},
+    {"mode": "size", "maxMB": "abc"},
+    {"mode": "ranges"},
+    "1-2",
+])
+def test_export_bad_split_rejected_immediately(client, vector3, split):
+    doc = open_doc(client, vector3)
+    r = client.post("/api/export", json={"plan": plan(doc["docId"], 2), "split": split})
+    assert r.status_code == 400 and r.json()["code"] == "bad_request"
+
+
+def test_export_split_ranges_via_api(client, vector3):
+    doc = open_doc(client, vector3)
+    r = client.post("/api/export", json={"plan": plan(doc["docId"], 3), "split": {"mode": "ranges", "ranges": "1,2-3"}})
+    job = wait_job(client, r.json()["jobId"])
+    assert job["status"] == "done", job["error"]
+    assert len(job["result"]["outputs"]) == 2

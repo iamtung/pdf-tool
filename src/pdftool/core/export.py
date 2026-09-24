@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import shutil
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,7 +15,9 @@ import pymupdf
 from pdftool.core import compressor, estimate
 from pdftool.core.assemble import Sources, assemble
 from pdftool.core.errors import PdfToolError
-from pdftool.core.plan import LADDER, LEVELS, FileSettings, ImageSettings, Plan, page_overrides, resolve_file
+from pdftool.core.plan import (
+    LEVELS, FileSettings, ImageSettings, Plan, page_overrides, resolve_file, target_ladder,
+)
 
 TARGET_BUDGET = 0.9
 MAX_PASSES = 3          # full optimize passes in target mode (spec §4.6: first run + 2 retries)
@@ -26,6 +29,7 @@ WORK_FREE_FACTOR = 3    # assembled + compressed passes + parts live in the work
 DEST_MANIFEST = "dest-tmp.txt"
 
 DISK_FULL_MSG = "Ổ đĩa không đủ chỗ trống để xuất file."
+DEST_NOT_WRITABLE_MSG = "Không ghi được vào thư mục đích. Hãy chọn thư mục khác."
 GS_FAILED_NOTE = "Ghostscript lỗi, giữ kết quả nén thường."
 
 
@@ -149,6 +153,15 @@ def _ghostscript(src: Path, out: Path, settings: ImageSettings | None = None) ->
         raise
 
 
+@contextmanager
+def _dest_access():
+    """Report a destination that can't be created/written (read-only folder, no permission) clearly."""
+    try:
+        yield
+    except PermissionError as e:
+        raise PdfToolError("bad_request", DEST_NOT_WRITABLE_MSG) from e
+
+
 def _is_disk_full(e: BaseException) -> bool:
     return (isinstance(e, OSError) and e.errno == errno.ENOSPC) or "No space left on device" in str(e)
 
@@ -232,6 +245,7 @@ def compress_to_target(
     """Spec §4.6 'nén về dưới X MB'."""
     target = fs.target_bytes
     budget = TARGET_BUDGET * target
+    ladder = target_ladder(fs)
     sizes = estimate.measure_sizes(src)
     free = [i for i in range(n) if i not in overrides]
     groups: dict[ImageSettings, list[int]] = {}
@@ -241,13 +255,13 @@ def compress_to_target(
     sample = estimate.prepare(src, sizes, free, workdir)  # extracted once, reused for every rung
 
     def est(k: int) -> int:
-        return fixed + (sample.estimate(LADDER[k]) if sample else 0)
+        return fixed + (sample.estimate(ladder[k]) if sample else 0)
 
-    last = len(LADDER) - 1
+    last = len(ladder) - 1
     rung = last
-    for k in range(len(LADDER)):
+    for k in range(len(ladder)):
         if progress:
-            progress(0.3 * k / len(LADDER))
+            progress(0.3 * k / len(ladder))
         if est(k) <= budget:
             rung = k
             break
@@ -258,13 +272,13 @@ def compress_to_target(
         if progress:
             progress(0.3 + 0.6 * p / MAX_PASSES)
         out = workdir / f"target-{p + 1}.pdf"
-        rep = compressor.optimize(src, out, _page_settings(n, overrides, LADDER[rung]), strip_metadata=fs.strip_metadata)
+        rep = compressor.optimize(src, out, _page_settings(n, overrides, ladder[rung]), strip_metadata=fs.strip_metadata)
         ran_last = ran_last or rung == last
         size = out.stat().st_size
         if best is None or size < best.path.stat().st_size:
             if best is not None:
                 best.path.unlink(missing_ok=True)
-            best = Compressed(path=out, warnings=rep.warnings, level=LADDER[rung])
+            best = Compressed(path=out, warnings=rep.warnings, level=ladder[rung])
         else:
             out.unlink(missing_ok=True)
         if size <= target or rung == last or not free:
@@ -377,7 +391,10 @@ def _run_export(plan: Plan, sources: Sources, opts: ExportOptions, workdir: Path
     split = validate_split(opts.split, n)  # before any heavy work
     used = {p.source.docId for p in plan.pages if p.source.type == "pdf"}
     original_size = sum(Path(sources[d]["path"]).stat().st_size for d in used)
-    opts.dest_dir.mkdir(parents=True, exist_ok=True)
+    with _dest_access():
+        opts.dest_dir.mkdir(parents=True, exist_ok=True)
+        if not os.access(opts.dest_dir, os.W_OK | os.X_OK):
+            raise PermissionError(opts.dest_dir)  # fail before any heavy work
     workdir.mkdir(parents=True, exist_ok=True)
     if os.stat(opts.dest_dir).st_dev == os.stat(workdir).st_dev:
         _check_space(workdir, (DEST_FREE_FACTOR + WORK_FREE_FACTOR) * original_size)
@@ -420,14 +437,15 @@ def _run_export(plan: Plan, sources: Sources, opts: ExportOptions, workdir: Path
     warnings = list(comp.warnings) if comp else []
     if progress:
         progress(0.9, "Đang ghi file")
-    if split is None:
-        outputs = [atomic_write(final, opts.dest_dir, stem, n, manifest)]
-    elif split[0] == "ranges":
-        outputs = _write_parts(final, split[1], opts, stem, None, workdir, warnings, strip, manifest)
-    else:
-        limit = split[1]
-        groups = group_by_size(estimate.measure_sizes(final), limit)
-        outputs = _write_parts(final, groups, opts, stem, limit, workdir, warnings, strip, manifest)
+    with _dest_access():
+        if split is None:
+            outputs = [atomic_write(final, opts.dest_dir, stem, n, manifest)]
+        elif split[0] == "ranges":
+            outputs = _write_parts(final, split[1], opts, stem, None, workdir, warnings, strip, manifest)
+        else:
+            limit = split[1]
+            groups = group_by_size(estimate.measure_sizes(final), limit)
+            outputs = _write_parts(final, groups, opts, stem, limit, workdir, warnings, strip, manifest)
     manifest.unlink(missing_ok=True)  # every tmp is gone once the writes returned
 
     result_size = sum(p.stat().st_size for p in outputs)
@@ -500,7 +518,8 @@ def run_estimate(plan: Plan, sources: Sources, page_ids: list[str] | None, level
         def free_est(s: ImageSettings) -> int:
             return sample.estimate(s) if sample else 0
 
-        chosen = next((s for s in LADDER if free_est(s) <= budget), LADDER[-1])
+        ladder = target_ladder(fs)
+        chosen = next((s for s in ladder if free_est(s) <= budget), ladder[-1])
         est += free_est(chosen)
         if sample:
             sample.close()

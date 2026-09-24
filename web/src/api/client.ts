@@ -8,24 +8,27 @@ export class ApiError extends Error {
   }
 }
 
+/** Build an ApiError from the backend's `{code, message}` error body (falls back when not JSON). */
+export async function errorFrom(res: Response, fallback = `Lỗi ${res.status}`): Promise<ApiError> {
+  let code = "internal";
+  let message = fallback;
+  try {
+    const data = await res.json();
+    code = data.code ?? code;
+    message = data.message ?? message;
+  } catch {
+    /* not JSON */
+  }
+  return new ApiError(code, message, res.status);
+}
+
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
     headers: body === undefined ? undefined : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (!res.ok) {
-    let code = "internal";
-    let message = `Lỗi ${res.status}`;
-    try {
-      const data = await res.json();
-      code = data.code ?? code;
-      message = data.message ?? message;
-    } catch {
-      /* not JSON */
-    }
-    throw new ApiError(code, message, res.status);
-  }
+  if (!res.ok) throw await errorFrom(res);
   return res.json() as Promise<T>;
 }
 
@@ -37,7 +40,7 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     const res = await fetch("/api/docs/upload", { method: "POST", body: form });
-    if (!res.ok) throw new ApiError("internal", "Tải file lên thất bại.", res.status);
+    if (!res.ok) throw await errorFrom(res, "Tải file lên thất bại.");
     return (await res.json()).path as string;
   },
 
@@ -55,7 +58,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source, width }),
     });
-    if (!res.ok) throw new ApiError("internal", "Không vẽ được trang.", res.status);
+    if (!res.ok) throw await errorFrom(res, "Không vẽ được trang.");
     const blob = await res.blob();
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();

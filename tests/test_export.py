@@ -433,3 +433,51 @@ def test_same_volume_needs_five_times_source(factor, ok, vector3, out_dir, tmp_p
         with pytest.raises(PdfToolError) as e:
             export(plan_for(3), vector3, out_dir, tmp_path)
         assert e.value.code == "disk_full"
+
+
+def test_target_mode_applies_grayscale_scans(scans, out_dir, tmp_path):
+    # Generous target: the light rungs (grayscale off by default) are chosen, so only the
+    # explicit advanced.grayscaleScans can make the near-gray scans DeviceGray.
+    target_mb = scans.stat().st_size / MB / 2
+    fc = {"targetMB": target_mb, "advanced": {"grayscaleScans": True}}
+    r = export(plan_for(4, fc=fc), scans, out_dir, tmp_path)
+    assert r["compressed"] and r["targetMet"]
+    with pikepdf.open(r["outputs"][0]["path"]) as pdf:
+        for page in pdf.pages:
+            for img in page.images.values():
+                assert img.ColorSpace == "/DeviceGray"
+
+
+def test_target_ladder_respects_grayscale_override():
+    from pdftool.core.plan import LADDER, FileCompression, resolve_file, target_ladder
+
+    on = resolve_file(FileCompression(targetMB=5, advanced={"grayscaleScans": True}))
+    off = resolve_file(FileCompression(targetMB=5, advanced={"grayscaleScans": False}))
+    default = resolve_file(FileCompression(targetMB=5))
+    assert all(r.grayscale_scans for r in target_ladder(on))
+    assert not any(r.grayscale_scans for r in target_ladder(off))
+    assert target_ladder(default) == LADDER
+
+
+def test_read_only_destination_is_bad_request(vector3, tmp_path):
+    dest = tmp_path / "ro"
+    dest.mkdir()
+    dest.chmod(0o555)
+    try:
+        with pytest.raises(PdfToolError) as e:
+            export(plan_for(3), vector3, dest, tmp_path)
+        assert e.value.code == "bad_request"
+        assert "Không ghi được vào thư mục đích" in e.value.message
+        assert list(dest.iterdir()) == []
+    finally:
+        dest.chmod(0o755)
+
+
+def test_permission_error_while_writing_is_bad_request(vector3, out_dir, tmp_path, monkeypatch):
+    def denied(*a, **k):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(export_mod, "_create_tmp", denied)
+    with pytest.raises(PdfToolError) as e:
+        export(plan_for(3), vector3, out_dir, tmp_path)
+    assert e.value.code == "bad_request"
