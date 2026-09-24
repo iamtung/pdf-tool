@@ -17,5 +17,6 @@ describe("format", () => {
     expect(describeFileCompression({ preset: "email" })).toBe("Email ≤ 20 MB");
     expect(describeFileCompression({ targetMB: 8 })).toBe("dưới 8 MB");
     expect(describeFileCompression({ preset: "high", advanced: { maxDpi: 90 } })).toBe("Tùy chỉnh");
+    expect(describeFileCompression({ targetMB: 8, advanced: { maxDpi: 90 } })).toBe("Tùy chỉnh");
   });
 });

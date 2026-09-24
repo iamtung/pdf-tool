@@ -35,7 +35,7 @@ export const PRESET_LABEL = {
 
 export function describeFileCompression(fc: FileCompression): string {
   if (fc.advanced?.useGhostscript) return "Ghostscript";
-  if (fc.targetMB) return `dưới ${fc.targetMB} MB`;
   if (fc.advanced?.maxDpi || fc.advanced?.jpegQuality) return "Tùy chỉnh";
+  if (fc.targetMB) return `dưới ${fc.targetMB} MB`;
   return fc.preset ? PRESET_LABEL[fc.preset] : "Cân bằng";
 }
