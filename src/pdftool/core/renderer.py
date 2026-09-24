@@ -1,5 +1,6 @@
 """Thumbnails and large page renders as WebP, cached on disk (spec §4.3)."""
 import os
+import threading
 from pathlib import Path
 
 import pymupdf
@@ -18,7 +19,9 @@ def _cache_file(fp: str, index: int, key: str) -> Path:
 
 
 def _write_atomic(path: Path, data: bytes) -> None:
-    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    # Thread-unique tmp name: two concurrent requests for the same page must not clobber each
+    # other's tmp file before the os.replace (previously keyed only by pid).
+    tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
 

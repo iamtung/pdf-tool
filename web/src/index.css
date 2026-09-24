@@ -79,6 +79,11 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    /* composition chart colours (Analysis panel) */
+    --part-images: #d85a30;
+    --part-fonts: #7f77dd;
+    --part-content: #378add;
+    --part-other: #b4b2a9;
 }
 
 .dark {

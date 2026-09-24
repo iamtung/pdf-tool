@@ -5,10 +5,10 @@ import { useApp } from "../state/app";
 import Kv from "./Kv";
 
 const PARTS = [
-  ["images", "Ảnh", "var(--img)"],
-  ["fonts", "Font", "var(--font)"],
-  ["content", "Nội dung trang", "var(--content)"],
-  ["other", "Khác", "var(--other)"],
+  ["images", "Ảnh", "var(--part-images)"],
+  ["fonts", "Font", "var(--part-fonts)"],
+  ["content", "Nội dung trang", "var(--part-content)"],
+  ["other", "Khác", "var(--part-other)"],
 ] as const;
 
 export default function FileOverview() {

@@ -6,7 +6,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { watchTheme } from "@/lib/theme";
 import { AppProvider } from "./state/app";
 import "./index.css";
-import "./styles.css";
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
 

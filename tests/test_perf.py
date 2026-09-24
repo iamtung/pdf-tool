@@ -38,6 +38,24 @@ def test_open_and_first_page_under_3s(big_pdf):
         assert time.perf_counter() - t <= 3.0
 
 
+def test_profile_of_big_file_under_180s(big_pdf, tmp_path):
+    """Spec §11.6: the profile of the ~500 MB fixture finishes in ≤ 3 minutes."""
+    from pdftool.core import profile as profile_mod
+    from pdftool.core.analyzer import analyze
+
+    t0 = time.perf_counter()
+    report = analyze(big_pdf)
+    analysis_s = time.perf_counter() - t0
+    t1 = time.perf_counter()
+    prof = profile_mod.build_profile(big_pdf, None, report, tmp_path)
+    profile_s = time.perf_counter() - t1
+    print(f"\nanalysis {analysis_s:.1f}s, profile {profile_s:.1f}s")
+    assert prof["version"] == 1
+    assert prof["pageCount"] == 34
+    assert prof["ratios"]
+    assert profile_s <= 180.0
+
+
 def test_backend_memory_stays_under_1gb(big_pdf):
     """Measure the real server process (the test process holds the fixture in memory)."""
     port = 8791

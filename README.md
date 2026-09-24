@@ -6,6 +6,8 @@ Công cụ PDF chạy trên máy (macOS), mở trong trình duyệt:
 - **Chỉnh sửa trang**: xoay, xóa, sắp xếp lại, chèn trang trắng / ảnh / trang từ PDF khác, hoàn tác.
 - **Nén** từng trang hoặc cả file (theo mức, theo preset, hoặc **"nén về dưới X MB"**), có ước tính dung lượng trước khi xuất.
 - **Tách** file theo khoảng trang hoặc theo dung lượng tối đa mỗi phần.
+- **Ước tính tức thì** (v2): hồ sơ nén được tính sẵn cho từng file, nên đổi preset / nhập dung lượng mục tiêu / chọn mức từng trang là thấy kết quả ngay, không tạo tác vụ ước tính.
+- **Cuộn liên tục** (v2): cột giữa xem cả file theo chiều dọc, cuộn xuyên suốt như Acrobat.
 
 Mọi xử lý đều diễn ra trên máy này — không gửi file đi đâu. Server chỉ nghe ở `127.0.0.1`.
 
@@ -48,6 +50,19 @@ cd web && npm run dev       # Vite dev server
 ```
 
 Mở http://localhost:5173.
+
+## Giao diện (v2)
+
+Giao diện dùng **Tailwind CSS v4** + **shadcn/ui** (Radix) + **lucide-react**. Các component shadcn nằm
+trong `web/src/components/ui/` — sinh bằng CLI, chỉ được chỉnh theme token; KHÔNG sửa tay. Thêm một
+component mới:
+
+```sh
+cd web
+npx shadcn@latest add <tên-component>
+```
+
+Theme token nằm ở `web/src/index.css`; chế độ sáng/tối theo hệ điều hành (`class="dark"` trên `<html>`).
 
 ## Kiểm thử
 

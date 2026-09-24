@@ -1,7 +1,0 @@
-/* Migrated to Tailwind/shadcn in v2. Only the composition chart colours remain until V8. */
-:root {
-  --img: #d85a30;
-  --font: #7f77dd;
-  --content: #378add;
-  --other: #b4b2a9;
-}
