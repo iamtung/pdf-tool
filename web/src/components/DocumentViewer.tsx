@@ -1,11 +1,11 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useApp } from "../state/app";
 import { useCurrentPage, useTargetIds } from "../state/selectors";
 import { displaySize } from "../lib/pages";
 import {
   PAGE_GAP, initialViewportState, isScrollKey, mostVisiblePage, pageLayouts, pageOffsetFraction,
-  scrollTopForOffset, viewportReducer,
+  scrollTopForOffset, viewportReducer, type ViewportEvent, type ViewportState,
 } from "../lib/viewport";
 import ViewerPage from "./ViewerPage";
 import ViewerToolbar from "./ViewerToolbar";
@@ -54,9 +54,15 @@ export default function DocumentViewer() {
   });
   useEffect(() => virtualizer.measure(), [layouts, virtualizer]);
 
-  const [nav, dispatchNav] = useReducer(viewportReducer, initialViewportState);
-  const stickyRef = useRef(nav);
-  stickyRef.current = nav;
+  // Navigation state lives in a ref updated synchronously: the rAF scroll handler must see a
+  // navigation in the same frame it happens, otherwise it would re-track the most visible page.
+  const navRef = useRef<ViewportState>(initialViewportState);
+  const navGen = useRef(0);
+  const applyNav = (event: ViewportEvent) => {
+    navRef.current = viewportReducer(navRef.current, event);
+    // A navigation must also invalidate any scroll frame already scheduled by a user scroll.
+    if (event.type === "navigate") navGen.current += 1;
+  };
   const lastScrollId = useRef<string | null>(null);
   const currentIdRef = useRef<string | null>(currentId);
   currentIdRef.current = currentId;
@@ -72,7 +78,7 @@ export default function DocumentViewer() {
     const page = pagesRef.current.find((p) => p.id === currentId);
     if (!page || page.id === lastScrollId.current) return;
     const index = pagesRef.current.indexOf(page);
-    dispatchNav({ type: "navigate", index });
+    applyNav({ type: "navigate", index });
     const el = scrollRef.current;
     if (el) el.scrollTop = layoutsRef.current[index]?.top ?? 0;
     lastScrollId.current = page.id;
@@ -82,10 +88,12 @@ export default function DocumentViewer() {
   const raf = useRef<number | null>(null);
   const onScroll = () => {
     if (raf.current != null) return;
+    const generation = navGen.current;
     raf.current = requestAnimationFrame(() => {
       raf.current = null;
+      if (generation !== navGen.current) return; // a navigation happened after this frame was queued
       const el = scrollRef.current;
-      if (!el || stickyRef.current.sticky !== null) return;
+      if (!el || navRef.current.sticky !== null) return;
       const index = mostVisiblePage(layoutsRef.current, el.scrollTop, el.clientHeight);
       const id = pagesRef.current[index]?.id;
       if (!id || id === currentIdRef.current) return;
@@ -101,7 +109,7 @@ export default function DocumentViewer() {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const release = () => dispatchNav({ type: "user-intent" });
+    const release = () => applyNav({ type: "user-intent" });
     const onKey = (e: KeyboardEvent) => { if (isScrollKey(e.key)) release(); };
     el.addEventListener("wheel", release, { passive: true });
     el.addEventListener("touchstart", release, { passive: true });
