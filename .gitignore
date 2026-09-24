@@ -5,3 +5,6 @@ __pycache__/
 src/pdftool/static/
 fixtures-out/
 .DS_Store
+
+# local design docs, plans and prompts (kept out of git)
+docs/
