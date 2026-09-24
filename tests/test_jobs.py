@@ -1,3 +1,4 @@
+import os
 import time
 
 import pytest
@@ -75,3 +76,106 @@ def test_exclusive_jobs_run_one_at_a_time(manager, vector3, tmp_path):
     assert manager.wait(b.id).status == "done"
     names = sorted(p.name for p in (tmp_path / "o").glob("*.pdf"))
     assert names == ["x_edited (2).pdf", "x_edited.pdf"]
+
+
+def _wait_for(pred, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(0.05)
+    return pred()
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _start_sleeper(manager, tmp_path, **kw):
+    pid_file = tmp_path / "child.pid"
+    job = manager.submit("tests.helpers:spawn_sleeper", {"pidFile": str(pid_file)}, **kw)
+    assert _wait_for(pid_file.exists, 10), job.public()
+    return job, int(pid_file.read_text())
+
+
+def test_cancel_kills_worker_children(manager, tmp_path):
+    job, child = _start_sleeper(manager, tmp_path)
+    assert _pid_alive(child)
+    manager.cancel(job.id)
+    assert job.status == "cancelled"
+    assert _wait_for(lambda: not _pid_alive(child), 3), "worker's child survived cancel"
+
+
+def test_shutdown_kills_running_jobs(manager, tmp_path):
+    job, child = _start_sleeper(manager, tmp_path)
+    manager.shutdown()
+    assert job.status == "cancelled"
+    assert _wait_for(lambda: not _pid_alive(child), 3)
+
+
+def test_cancelled_job_stays_cancelled_when_worker_finishes(manager):
+    job = manager.submit("tests.helpers:quick", {"delay": 0.3})
+    assert _wait_for(lambda: job.status == "running")
+    manager.cancel(job.id)
+    time.sleep(1.0)
+    assert job.status == "cancelled"
+    assert job.result is None
+
+
+def test_cancel_after_done_is_noop(manager):
+    job = manager.wait(manager.submit("tests.helpers:quick", {}).id)
+    assert job.status == "done"
+    version = job.version
+    assert manager.cancel(job.id) is job
+    assert job.status == "done" and job.version == version and job.result == {"ok": True}
+
+
+def test_cancel_queued_exclusive_never_runs(manager, vector3, tmp_path):
+    blocker = manager.submit("tests.helpers:quick", {"delay": 0.8}, exclusive=True)
+    marker = tmp_path / "ran.txt"
+    queued = manager.submit("tests.helpers:quick", {"marker": str(marker)}, exclusive=True)
+    time.sleep(0.2)
+    assert queued.status == "queued"
+    manager.cancel(queued.id)
+    assert queued.status == "cancelled"
+    assert manager.wait(blocker.id).status == "done"
+    export = manager.submit("export", {
+        "plan": {"pages": [{"id": "p0", "source": {"type": "pdf", "docId": "a", "index": 0}}]},
+        "sources": {"a": {"path": str(vector3)}}, "destDir": str(tmp_path / "o"), "baseName": "x",
+    }, exclusive=True)
+    assert manager.wait(export.id, timeout=30).status == "done", export.error
+    assert not marker.exists()
+    assert queued.status == "cancelled"
+
+
+def test_large_result_arrives_intact(manager):
+    job = manager.wait(manager.submit("tests.helpers:big_result", {"size": 5_000_000}).id)
+    assert job.status == "done", job.error
+    assert len(job.result["blob"]) == 5_000_000 and set(job.result["blob"]) == {"x"}
+    assert job.result["items"] == list(range(10_000))
+
+
+def test_unexpected_error_message(manager):
+    job = manager.wait(manager.submit("tests.helpers:boom", {"secret": "hunter2"}).id)
+    assert job.status == "failed"
+    assert job.error == {"code": "internal", "message": "RuntimeError: kaboom"}
+
+
+def test_dedup_key_is_not_a_job_id(manager):
+    job = manager.submit("tests.helpers:quick", {"delay": 1.0}, key="fp9")
+    assert manager.get(f"tests.helpers:quick:fp9") is None
+    assert manager.find_active("tests.helpers:quick", "fp9") is job
+    assert manager.get(job.id) is job
+    manager.wait(job.id)
+    assert manager.find_active("tests.helpers:quick", "fp9") is None
+
+
+def test_finished_jobs_are_pruned(manager):
+    old = manager.wait(manager.submit("tests.helpers:quick", {}).id)
+    old._finished_at -= 31 * 60
+    manager.submit("tests.helpers:quick", {})
+    assert manager.get(old.id) is None
