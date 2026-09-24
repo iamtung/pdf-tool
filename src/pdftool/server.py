@@ -1,16 +1,85 @@
 import contextlib
+import logging
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import Headers
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from pdftool.api import docs, jobs, system, work
 from pdftool.core.documents import Registry
 from pdftool.core.errors import PdfToolError
 from pdftool.jobs import JobManager
 
+log = logging.getLogger(__name__)
+
 STATIC = Path(__file__).parent / "static"
+
+# Spec §8: the server only listens on 127.0.0.1. Host checks stop DNS rebinding; Origin
+# checks stop cross-site requests from other pages the user has open.
+ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
+DEV_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}  # Vite dev server
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+UPLOAD_PATH = "/api/docs/upload"
+
+
+def _error(code: str, message: str, status: int) -> JSONResponse:
+    return JSONResponse({"code": code, "message": message}, status_code=status)
+
+
+class LocalGuardMiddleware:
+    """Host allowlist (DNS rebinding), Origin check (CSRF) and content-type check for /api."""
+
+    def __init__(self, app, allowed_hosts=ALLOWED_HOSTS, dev_origins=DEV_ORIGINS):
+        self.app = app
+        self.allowed_hosts = set(allowed_hosts)
+        self.dev_origins = set(dev_origins)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+        response = self._check(scope)
+        if response is not None:
+            return await response(scope, receive, send)
+        await self.app(scope, receive, send)
+
+    def _check(self, scope) -> JSONResponse | None:
+        headers = Headers(scope=scope)
+        host = headers.get("host", "")
+        hostname = urlsplit(f"//{host}").hostname if host else None
+        if hostname not in self.allowed_hosts:
+            return _error("bad_request", "Host không hợp lệ.", 400)
+
+        method = scope.get("method", "GET")
+        if method in SAFE_METHODS:
+            return None
+        origin = headers.get("origin")
+        if origin is not None and origin not in self.dev_origins and urlsplit(origin).netloc.lower() != host.lower():
+            return _error("forbidden", "Yêu cầu từ nguồn khác bị từ chối.", 403)
+
+        path = scope.get("path", "")
+        if path.startswith("/api/") and method in ("POST", "PUT", "PATCH"):
+            ctype = headers.get("content-type", "").split(";")[0].strip().lower()
+            has_body = headers.get("content-length", "0") != "0" or "transfer-encoding" in headers
+            if path == UPLOAD_PATH:
+                if ctype != "multipart/form-data":
+                    return _error("bad_request", "Cần gửi file dạng multipart/form-data.", 415)
+            elif has_body and ctype != "application/json":
+                return _error("bad_request", "Nội dung yêu cầu phải là JSON.", 415)
+        return None
+
+
+def _validation_message(e: RequestValidationError) -> str:
+    errs = e.errors()
+    if not errs:
+        return "Yêu cầu không hợp lệ."
+    first = errs[0]
+    loc = ".".join(str(p) for p in first.get("loc", ()) if p != "body")
+    return f"Yêu cầu không hợp lệ: {loc + ': ' if loc else ''}{first.get('msg', '')}"
 
 
 def create_app() -> FastAPI:
@@ -23,20 +92,52 @@ def create_app() -> FastAPI:
     app = FastAPI(title="pdftool", lifespan=lifespan)
     app.state.registry = Registry()
     app.state.jobs = JobManager()
+    app.add_middleware(LocalGuardMiddleware)
 
     @app.exception_handler(PdfToolError)
     async def _pdftool_error(_: Request, e: PdfToolError):
-        return JSONResponse({"code": e.code, "message": e.message}, status_code=e.http_status)
+        return _error(e.code, e.message, e.http_status)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(_: Request, e: RequestValidationError):
+        return _error("bad_request", _validation_message(e), 400)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(_: Request, e: StarletteHTTPException):
+        code = {404: "not_found", 403: "forbidden"}.get(e.status_code)
+        if code is None:
+            code = "internal" if e.status_code >= 500 else "bad_request"
+        message = e.detail if isinstance(e.detail, str) else "Yêu cầu không hợp lệ."
+        if e.status_code == 404:
+            message = "Không tìm thấy."
+        return _error(code, message, e.status_code)
+
+    @app.exception_handler(Exception)
+    async def _unexpected(request: Request, e: Exception):
+        log.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return _error("internal", "Lỗi không mong muốn.", 500)
 
     for r in (docs.router, work.router, jobs.router, system.router):
         app.include_router(r)
 
+    @app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+                   include_in_schema=False)
+    def api_not_found(path: str):
+        raise PdfToolError("not_found", "Không tìm thấy API.")
+
     if (STATIC / "index.html").exists():
+        static_root = STATIC.resolve()
+        index = static_root / "index.html"
         app.mount("/assets", StaticFiles(directory=STATIC / "assets"), name="assets")
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            f = STATIC / path
-            return FileResponse(f if path and f.is_file() else STATIC / "index.html")
+            if path == "api" or path.startswith("api/"):
+                raise PdfToolError("not_found", "Không tìm thấy API.")
+            if path:
+                f = (static_root / path).resolve()
+                if f.is_relative_to(static_root) and f.is_file():
+                    return FileResponse(f)
+            return FileResponse(index)
 
     return app

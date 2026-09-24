@@ -226,7 +226,14 @@ class JobManager:
                     return
                 # Start under the lock so cancel() either sees no process (and we bail out
                 # above) or sees a started process it can kill.
-                proc.start()
+                try:
+                    proc.start()
+                except Exception as e:  # e.g. fork/spawn failure (EAGAIN, EMFILE)
+                    send_conn.close()
+                    recv_conn.close()
+                    self._update(job, status="failed", error={
+                        "code": "internal", "message": f"Không khởi chạy được tác vụ: {type(e).__name__}"})
+                    return
                 job._proc = proc
             send_conn.close()  # the child's death now gives us EOF
             try:

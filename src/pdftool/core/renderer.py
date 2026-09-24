@@ -59,7 +59,7 @@ def render_source(source: dict, width: int = 160) -> bytes:
     """Render a non-PDF plan page (blank or image) at the given width."""
     if source["type"] == "blank":
         w, h = source["width"], source["height"]
-        img = Image.new("RGB", (width, max(1, round(width * h / w))), "white")
+        img = Image.new("RGB", (width, min(width * 4, max(1, round(width * h / w)))), "white")
     elif source["type"] == "image":
         img = Image.open(source["path"]).convert("RGB")
         img.thumbnail((width, width * 4))

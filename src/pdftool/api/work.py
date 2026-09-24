@@ -1,9 +1,11 @@
 """Plan-level endpoints: render plan pages, estimate, export."""
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
-from pydantic import BaseModel
+from PIL import Image, UnidentifiedImageError
+from pydantic import BaseModel, Field
 
 from pdftool.api.deps import jobs, registry
 from pdftool.api.docs import IMAGE_HEADERS, default_destination
@@ -18,7 +20,7 @@ router = APIRouter(prefix="/api")
 
 class RenderRequest(BaseModel):
     source: ImageSource | BlankSource
-    width: int = 160
+    width: int = Field(160, ge=16, le=800)
 
 
 class EstimateRequest(BaseModel):
@@ -34,6 +36,11 @@ class ExportRequest(BaseModel):
     split: dict | None = None
 
 
+def safe_base_name(name: str | None) -> str:
+    """Make a user-supplied output name safe to use as a filename stem (no path parts)."""
+    return re.sub(r"[/\\:\x00]", "_", name or "").lstrip(". \t\r\n").rstrip()
+
+
 def sources_for(plan: Plan, reg: Registry) -> dict:
     ids = {p.source.docId for p in plan.pages if p.source.type == "pdf"}
     return {d: reg.get(d).source() for d in ids}
@@ -43,8 +50,11 @@ def sources_for(plan: Plan, reg: Registry) -> dict:
 def render_source(req: RenderRequest) -> Response:
     if req.source.type == "image" and not Path(req.source.path).is_file():
         raise PdfToolError("not_found", "Không tìm thấy ảnh.")
-    return Response(renderer.render_source(req.source.model_dump(), req.width), media_type="image/webp",
-                    headers=IMAGE_HEADERS)
+    try:
+        data = renderer.render_source(req.source.model_dump(), req.width)
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, SyntaxError) as e:
+        raise PdfToolError("bad_request", "File ảnh không đọc được.") from e
+    return Response(data, media_type="image/webp", headers=IMAGE_HEADERS)
 
 
 @router.post("/estimate")
@@ -67,7 +77,8 @@ def export(req: ExportRequest, reg: Registry = Depends(registry), jm: JobManager
     sources = sources_for(req.plan, reg)
     primary = next((reg.get(p.source.docId) for p in req.plan.pages if p.source.type == "pdf"), None)
     dest = Path(req.destDir) if req.destDir else (default_destination(primary) if primary else Path.home() / "Downloads")
-    base = req.baseName or (primary.original_path.stem if primary else "pages")
+    default = primary.original_path.stem if primary else "pages"
+    base = safe_base_name(req.baseName) or safe_base_name(default) or "pages"
     job = jm.submit("export", {
         "plan": req.plan.model_dump(), "sources": sources, "destDir": str(dest), "baseName": base,
         "split": req.split,

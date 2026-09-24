@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Local PDF analysis, page editing and compression tool"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.115",
+    "fastapi>=0.120",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
     "pymupdf>=1.26",

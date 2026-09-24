@@ -4,6 +4,7 @@ class PdfToolError(Exception):
     HTTP_STATUS = {
         "password_required": 401,
         "wrong_password": 403,
+        "forbidden": 403,
         "not_found": 404,
         "file_changed": 409,
         "corrupted": 422,

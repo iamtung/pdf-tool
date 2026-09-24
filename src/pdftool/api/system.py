@@ -1,3 +1,4 @@
+import functools
 import shutil
 import subprocess
 from pathlib import Path
@@ -21,12 +22,21 @@ class RevealRequest(BaseModel):
     path: str
 
 
+@functools.cache
+def _gs_version(gs: str) -> str | None:
+    """Ghostscript version, probed once per binary path (which() stays live so a
+    later `brew install ghostscript` is picked up without a restart)."""
+    try:
+        out = subprocess.run([gs, "--version"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.strip() or None
+
+
 @router.get("/health")
 def health() -> dict:
     gs = shutil.which("gs")
-    version = None
-    if gs:
-        version = subprocess.run([gs, "--version"], capture_output=True, text=True).stdout.strip() or None
+    version = _gs_version(gs) if gs else None
     return {
         "ghostscript": gs is not None,
         "gsVersion": version,

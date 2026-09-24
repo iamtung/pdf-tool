@@ -1,4 +1,5 @@
 """Registry of open documents: docId -> path, password, fingerprint, mtime."""
+import contextlib
 import hashlib
 import threading
 import uuid
@@ -77,6 +78,15 @@ class Document:
     repaired: bool
     fitz: pymupdf.Document = field(repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    closed: bool = False  # set under `lock` by Registry.close
+
+    @contextlib.contextmanager
+    def use(self):
+        """Hold the document lock and yield the open fitz doc; not_found if it was closed."""
+        with self.lock:
+            if self.closed:
+                raise PdfToolError("not_found", "Tài liệu chưa được mở hoặc đã đóng.")
+            yield self.fitz
 
     def source(self) -> dict:
         """What a worker process needs to reopen this document."""
@@ -137,7 +147,9 @@ class Registry:
         with self._lock:
             doc = self._docs.pop(doc_id, None)
         if doc:
-            doc.fitz.close()
+            with doc.lock:
+                doc.closed = True
+                doc.fitz.close()
             if doc.repaired:
                 doc.path.unlink(missing_ok=True)
 

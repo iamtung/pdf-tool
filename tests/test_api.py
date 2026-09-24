@@ -8,9 +8,12 @@ from fastapi.testclient import TestClient
 from pdftool.server import create_app
 
 
+BASE = "http://127.0.0.1"
+
+
 @pytest.fixture
 def client():
-    with TestClient(create_app()) as c:
+    with TestClient(create_app(), base_url=BASE) as c:
         yield c
 
 
@@ -164,3 +167,148 @@ def test_pick_file_uses_macos(client, monkeypatch):
     from pdftool import macos
     monkeypatch.setattr(macos, "pick_files", lambda kind, multiple: ["/tmp/a.pdf"])
     assert client.post("/api/system/pick-file", json={"kind": "pdf"}).json() == {"paths": ["/tmp/a.pdf"]}
+
+
+# --- hardening (host/origin checks, traversal, error shape) ---
+
+def test_spa_path_traversal_serves_index(tmp_path, monkeypatch):
+    from pdftool import server
+    static = tmp_path / "web" / "static"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("<html>spa</html>")
+    (static / "favicon.ico").write_text("icon")
+    (tmp_path / "secret.txt").write_text("TOP-SECRET")
+    monkeypatch.setattr(server, "STATIC", static)
+    with TestClient(server.create_app(), base_url=BASE) as c:
+        for url in ("/%2e%2e/%2e%2e/secret.txt", "/%2e%2e%2f%2e%2e%2fsecret.txt", "/..%2f..%2fsecret.txt"):
+            r = c.get(url)
+            assert "TOP-SECRET" not in r.text, url
+            assert r.status_code == 200 and r.text == "<html>spa</html>", url
+        assert c.get("/favicon.ico").text == "icon"
+        assert c.get("/some/client/route").text == "<html>spa</html>"
+        r = c.get("/api/nope")
+        assert r.status_code == 404 and r.json()["code"] == "not_found"
+
+
+def test_unknown_api_route_is_json_404(client):
+    r = client.get("/api/nope")
+    assert r.status_code == 404 and r.json()["code"] == "not_found"
+    r = client.post("/api/nope", json={})
+    assert r.status_code == 404 and r.json()["code"] == "not_found"
+
+
+def test_foreign_host_rejected(client):
+    r = client.get("/api/system/health", headers={"host": "evil.example"})
+    assert r.status_code == 400 and r.json()["code"] == "bad_request"
+    r = client.get("/api/system/health", headers={"host": "localhost:5173"})
+    assert r.status_code == 200
+
+
+@pytest.mark.parametrize("origin,status", [
+    ("http://evil.example", 403),
+    ("null", 403),
+    ("http://127.0.0.1", 404),          # same origin as Host -> passes to the endpoint
+    ("http://localhost:5173", 404),     # Vite dev server
+    ("http://127.0.0.1:5173", 404),
+])
+def test_origin_check(client, tmp_path, origin, status):
+    r = client.post("/api/docs/open", json={"path": str(tmp_path / "x.pdf")}, headers={"Origin": origin})
+    assert r.status_code == status
+    assert r.json()["code"] == ("forbidden" if status == 403 else "not_found")
+
+
+def test_cross_origin_upload_and_bodyless_post_rejected(client):
+    r = client.post("/api/docs/upload", files={"file": ("x.pdf", b"%PDF", "application/pdf")},
+                    headers={"Origin": "http://evil.example"})
+    assert r.status_code == 403 and r.json()["code"] == "forbidden"
+    r = client.post("/api/system/pick-folder", headers={"Origin": "http://evil.example"})
+    assert r.status_code == 403
+
+
+def test_non_json_body_rejected(client, tmp_path):
+    body = json.dumps({"path": str(tmp_path / "x.pdf")})
+    r = client.post("/api/docs/open", content=body, headers={"Content-Type": "text/plain"})
+    assert r.status_code in (400, 415) and r.json()["code"] == "bad_request"
+    r = client.post("/api/docs/upload", content=b"x", headers={"Content-Type": "text/plain"})
+    assert r.status_code in (400, 415) and r.json()["code"] == "bad_request"
+
+
+def test_validation_error_shape(client):
+    r = client.post("/api/docs/open", json={})
+    assert r.status_code == 400
+    body = r.json()
+    assert body["code"] == "bad_request" and "path" in body["message"] and "detail" not in body
+
+
+def test_unexpected_error_is_generic_500(client, monkeypatch):
+    from pdftool.api import system
+
+    def boom():
+        raise RuntimeError("secret internals")
+    monkeypatch.setattr(system.macos, "pick_folder", boom)
+    with TestClient(client.app, base_url=BASE, raise_server_exceptions=False) as c:
+        r = c.post("/api/system/pick-folder")
+    assert r.status_code == 500
+    assert r.json() == {"code": "internal", "message": "Lỗi không mong muốn."}
+
+
+def test_render_non_image_is_bad_request(client, tmp_path):
+    f = tmp_path / "notes.txt"
+    f.write_text("not an image")
+    r = client.post("/api/render", json={"source": {"type": "image", "path": str(f)}})
+    assert r.status_code == 400 and r.json()["code"] == "bad_request"
+
+
+def test_render_width_limited(client):
+    r = client.post("/api/render", json={"source": {"type": "blank", "width": 1, "height": 1}, "width": 20000})
+    assert r.status_code == 400 and r.json()["code"] == "bad_request"
+    r = client.post("/api/render", json={"source": {"type": "blank", "width": 1, "height": 100000}, "width": 800})
+    assert r.status_code == 200
+
+
+@pytest.mark.parametrize("name", ["..", ".", "  "])  # "" is sent as a non-file field -> 400
+def test_upload_bad_names_fall_back(client, name):
+    r = client.post("/api/docs/upload", files={"file": (name, b"%PDF-1.4", "application/pdf")})
+    assert r.status_code == 200, r.text
+    assert r.json()["path"].endswith("/upload.pdf")
+
+
+def test_export_sanitises_base_name(client, vector3):
+    doc = open_doc(client, vector3)
+    r = client.post("/api/export", json={"plan": plan(doc["docId"], 1), "baseName": "Q1/Q2 report"})
+    job = wait_job(client, r.json()["jobId"])
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["outputs"][0]["path"] == str(vector3.parent / "Q1_Q2 report_edited.pdf")
+
+
+def test_export_base_name_only_dots_uses_default(client, vector3):
+    doc = open_doc(client, vector3)
+    r = client.post("/api/export", json={"plan": plan(doc["docId"], 1), "baseName": " ../.."})
+    job = wait_job(client, r.json()["jobId"])
+    assert job["status"] == "done", job["error"]
+    out = job["result"]["outputs"][0]["path"]
+    assert out.startswith(str(vector3.parent) + "/") and "/.." not in out
+
+
+def test_closed_doc_is_not_found(client, vector3):
+    doc = open_doc(client, vector3)
+    stale = client.app.state.registry.get(doc["docId"])
+    assert client.delete(f"/api/docs/{doc['docId']}").json() == {"ok": True}
+    r = client.get(f"/api/docs/{doc['docId']}/pages/0/thumb")
+    assert r.status_code == 404 and r.json()["code"] == "not_found"
+    # a request that fetched the Document before close must not touch the closed fitz doc
+    from pdftool.core.errors import PdfToolError
+    with pytest.raises(PdfToolError) as e:
+        with stale.use():
+            pass
+    assert e.value.code == "not_found"
+
+
+def test_job_marked_failed_when_process_cannot_start(client, monkeypatch):
+    import multiprocessing.process
+    monkeypatch.setattr(multiprocessing.process.BaseProcess, "start",
+                        lambda self: (_ for _ in ()).throw(OSError("EAGAIN")))
+    r = client.post("/api/estimate", json={"plan": {"pages": [
+        {"id": "b", "source": {"type": "blank", "width": 595, "height": 842}}]}})
+    job = wait_job(client, r.json()["jobId"], timeout=10)
+    assert job["status"] == "failed" and job["error"]["code"] == "internal"

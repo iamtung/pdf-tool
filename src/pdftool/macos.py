@@ -44,4 +44,4 @@ return POSIX path of picked''') or None
 
 
 def reveal(path: str) -> None:
-    subprocess.run(["open", "-R", path], check=False)
+    subprocess.run(["open", "-R", "--", path], check=False)

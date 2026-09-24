@@ -3,7 +3,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
@@ -26,8 +26,8 @@ class OpenRequest(BaseModel):
 
 
 def doc_info(doc: Document) -> dict:
-    with doc.lock:
-        ov = analyzer.overview(doc.fitz, doc.path)
+    with doc.use() as fdoc:
+        ov = analyzer.overview(fdoc, doc.path)
     return {
         "docId": doc.id,
         "name": doc.original_path.name,
@@ -46,7 +46,9 @@ def open_doc(req: OpenRequest, reg: Registry = Depends(registry)) -> dict:
 
 @router.post("/upload")
 def upload(file: UploadFile = File(...)) -> dict:
-    name = re.sub(r"[/\\:]", "_", file.filename or "upload.pdf")
+    name = re.sub(r"[/\\:\x00]", "_", file.filename or "").strip()
+    if name in ("", ".", ".."):
+        name = "upload.pdf"
     dest_dir = paths.uploads_dir() / uuid.uuid4().hex[:12]
     dest_dir.mkdir(parents=True)
     dest = dest_dir / name
@@ -72,20 +74,20 @@ def analysis(doc_id: str, reg: Registry = Depends(registry), jm: JobManager = De
 
 
 @router.get("/{doc_id}/pages/{index}/thumb")
-def thumb(doc_id: str, index: int, w: int = 160, reg: Registry = Depends(registry)) -> Response:
+def thumb(doc_id: str, index: int, w: int = Query(160, ge=16, le=800), reg: Registry = Depends(registry)) -> Response:
     doc = reg.get(doc_id)
     _check_index(doc, index)
-    with doc.lock:
-        data = renderer.thumbnail(doc.fitz, doc.fingerprint, index, w)
+    with doc.use() as fdoc:
+        data = renderer.thumbnail(fdoc, doc.fingerprint, index, w)
     return Response(data, media_type="image/webp", headers=IMAGE_HEADERS)
 
 
 @router.get("/{doc_id}/pages/{index}/render")
-def render(doc_id: str, index: int, scale: float = 1.5, reg: Registry = Depends(registry)) -> Response:
+def render(doc_id: str, index: int, scale: float = Query(1.5, gt=0, le=8), reg: Registry = Depends(registry)) -> Response:
     doc = reg.get(doc_id)
     _check_index(doc, index)
-    with doc.lock:
-        data = renderer.render(doc.fitz, doc.fingerprint, index, scale)
+    with doc.use() as fdoc:
+        data = renderer.render(fdoc, doc.fingerprint, index, scale)
     return Response(data, media_type="image/webp", headers=IMAGE_HEADERS)
 
 
