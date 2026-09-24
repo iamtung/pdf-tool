@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -22,7 +23,8 @@ STATIC = Path(__file__).parent / "static"
 # Spec §8: the server only listens on 127.0.0.1. Host checks stop DNS rebinding; Origin
 # checks stop cross-site requests from other pages the user has open.
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
-DEV_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}  # Vite dev server
+# Vite dev server; trusted only when PDFTOOL_DEV=1 (set by the CLI --dev flag).
+DEV_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 UPLOAD_PATH = "/api/docs/upload"
 
@@ -34,7 +36,7 @@ def _error(code: str, message: str, status: int) -> JSONResponse:
 class LocalGuardMiddleware:
     """Host allowlist (DNS rebinding), Origin check (CSRF) and content-type check for /api."""
 
-    def __init__(self, app, allowed_hosts=ALLOWED_HOSTS, dev_origins=DEV_ORIGINS):
+    def __init__(self, app, allowed_hosts=ALLOWED_HOSTS, dev_origins=()):
         self.app = app
         self.allowed_hosts = set(allowed_hosts)
         self.dev_origins = set(dev_origins)
@@ -54,6 +56,12 @@ class LocalGuardMiddleware:
         if hostname not in self.allowed_hosts:
             return _error("bad_request", "Host không hợp lệ.", 400)
 
+        path = scope.get("path", "")
+        # Browsers label requests from other sites; block them even for GETs (e.g. an
+        # <img>/fetch from a web page probing or triggering work on the local API).
+        if (path == "/api" or path.startswith("/api/")) and headers.get("sec-fetch-site") == "cross-site":
+            return _error("forbidden", "Yêu cầu từ nguồn khác bị từ chối.", 403)
+
         method = scope.get("method", "GET")
         if method in SAFE_METHODS:
             return None
@@ -61,7 +69,6 @@ class LocalGuardMiddleware:
         if origin is not None and origin not in self.dev_origins and urlsplit(origin).netloc.lower() != host.lower():
             return _error("forbidden", "Yêu cầu từ nguồn khác bị từ chối.", 403)
 
-        path = scope.get("path", "")
         if path.startswith("/api/") and method in ("POST", "PUT", "PATCH"):
             ctype = headers.get("content-type", "").split(";")[0].strip().lower()
             has_body = headers.get("content-length", "0") != "0" or "transfer-encoding" in headers
@@ -92,7 +99,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="pdftool", lifespan=lifespan)
     app.state.registry = Registry()
     app.state.jobs = JobManager()
-    app.add_middleware(LocalGuardMiddleware)
+    dev = os.environ.get("PDFTOOL_DEV") == "1"
+    app.add_middleware(LocalGuardMiddleware, dev_origins=DEV_ORIGINS if dev else ())
 
     @app.exception_handler(PdfToolError)
     async def _pdftool_error(_: Request, e: PdfToolError):

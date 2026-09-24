@@ -8,7 +8,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from pdftool.api.deps import jobs, registry
-from pdftool.api.docs import IMAGE_HEADERS, default_destination
+from pdftool.api.docs import IMAGE_HEADERS, MAX_NAME_BYTES, default_destination, truncate_utf8
 from pdftool.core import renderer
 from pdftool.core.documents import Registry
 from pdftool.core.errors import PdfToolError
@@ -38,7 +38,8 @@ class ExportRequest(BaseModel):
 
 def safe_base_name(name: str | None) -> str:
     """Make a user-supplied output name safe to use as a filename stem (no path parts)."""
-    return re.sub(r"[/\\:\x00]", "_", name or "").lstrip(". \t\r\n").rstrip()
+    clean = re.sub(r"[/\\:\x00]", "_", name or "").lstrip(". \t\r\n")
+    return truncate_utf8(clean, MAX_NAME_BYTES).rstrip()
 
 
 def sources_for(plan: Plan, reg: Registry) -> dict:

@@ -208,8 +208,7 @@ def test_foreign_host_rejected(client):
     ("http://evil.example", 403),
     ("null", 403),
     ("http://127.0.0.1", 404),          # same origin as Host -> passes to the endpoint
-    ("http://localhost:5173", 404),     # Vite dev server
-    ("http://127.0.0.1:5173", 404),
+    ("http://localhost:5173", 403),     # Vite dev server: only trusted with PDFTOOL_DEV=1
 ])
 def test_origin_check(client, tmp_path, origin, status):
     r = client.post("/api/docs/open", json={"path": str(tmp_path / "x.pdf")}, headers={"Origin": origin})
@@ -312,3 +311,52 @@ def test_job_marked_failed_when_process_cannot_start(client, monkeypatch):
         {"id": "b", "source": {"type": "blank", "width": 595, "height": 842}}]}})
     job = wait_job(client, r.json()["jobId"], timeout=10)
     assert job["status"] == "failed" and job["error"]["code"] == "internal"
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "http://127.0.0.1:5173"])
+def test_dev_origins_need_env(tmp_path, monkeypatch, origin):
+    body = {"path": str(tmp_path / "x.pdf")}
+    monkeypatch.delenv("PDFTOOL_DEV", raising=False)
+    with TestClient(create_app(), base_url=BASE) as c:
+        r = c.post("/api/docs/open", json=body, headers={"Origin": origin})
+        assert r.status_code == 403 and r.json()["code"] == "forbidden"
+    monkeypatch.setenv("PDFTOOL_DEV", "1")
+    with TestClient(create_app(), base_url=BASE) as c:
+        r = c.post("/api/docs/open", json=body, headers={"Origin": origin})
+        assert r.status_code == 404 and r.json()["code"] == "not_found"
+
+
+@pytest.mark.parametrize("site,status", [
+    ("cross-site", 403), ("same-origin", 200), ("same-site", 200), ("none", 200), (None, 200),
+])
+def test_sec_fetch_site(client, site, status):
+    headers = {"Sec-Fetch-Site": site} if site else {}
+    r = client.get("/api/system/health", headers=headers)
+    assert r.status_code == status
+    if status == 403:
+        assert r.json()["code"] == "forbidden"
+        r = client.post("/api/system/pick-folder", headers=headers)
+        assert r.status_code == 403
+
+
+LONG_VN = "Báo cáo tài chính quý một năm hai nghìn " * 8  # ~300 chars, multibyte
+
+
+def test_upload_long_name_truncated(client):
+    name = LONG_VN[:300] + ".pdf"
+    assert len(name.encode()) > 300
+    r = client.post("/api/docs/upload", files={"file": (name, b"%PDF-1.4", "application/pdf")})
+    assert r.status_code == 200, r.text
+    saved = r.json()["path"].rsplit("/", 1)[1]
+    assert len(saved.encode()) <= 200 and saved.endswith(".pdf")
+    assert name.startswith(saved[:-4])  # a clean prefix: no split character
+
+
+def test_export_long_base_name_truncated(client, vector3):
+    doc = open_doc(client, vector3)
+    r = client.post("/api/export", json={"plan": plan(doc["docId"], 1), "baseName": LONG_VN[:300]})
+    job = wait_job(client, r.json()["jobId"])
+    assert job["status"] == "done", job["error"]
+    out = job["result"]["outputs"][0]["path"]
+    stem = out.rsplit("/", 1)[1].removesuffix("_edited.pdf")
+    assert len(stem.encode()) <= 200 and LONG_VN.startswith(stem)

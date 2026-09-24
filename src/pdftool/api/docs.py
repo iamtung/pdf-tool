@@ -20,6 +20,14 @@ SYNC_ANALYSIS_MAX_PAGES = 200
 IMAGE_HEADERS = {"Cache-Control": "private, max-age=3600"}
 
 
+MAX_NAME_BYTES = 200  # APFS allows 255; leave room for suffixes like "_compressed (2).<hex>.tmp"
+
+
+def truncate_utf8(s: str, max_bytes: int) -> str:
+    """Cut `s` to at most `max_bytes` UTF-8 bytes without splitting a character."""
+    return s.encode()[:max(0, max_bytes)].decode(errors="ignore")
+
+
 class OpenRequest(BaseModel):
     path: str
     password: str | None = None
@@ -49,6 +57,10 @@ def upload(file: UploadFile = File(...)) -> dict:
     name = re.sub(r"[/\\:\x00]", "_", file.filename or "").strip()
     if name in ("", ".", ".."):
         name = "upload.pdf"
+    stem, dot, ext = name.rpartition(".")
+    if not stem or len(ext.encode()) > 20:  # no usable extension -> truncate the whole name
+        stem, dot, ext = name, "", ""
+    name = truncate_utf8(stem, MAX_NAME_BYTES - len((dot + ext).encode())) + dot + ext
     dest_dir = paths.uploads_dir() / uuid.uuid4().hex[:12]
     dest_dir.mkdir(parents=True)
     dest = dest_dir / name
