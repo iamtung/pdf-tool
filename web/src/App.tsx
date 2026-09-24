@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/client";
 import { Button } from "@/components/ui/button";
+import DocumentViewer from "./components/DocumentViewer";
 import PagePanel from "./components/PagePanel";
-import PageViewer from "./components/PageViewer";
 import ThumbnailStrip from "./components/ThumbnailStrip";
 import TopBar from "./components/TopBar";
 import Dialogs from "./dialogs/Dialogs";
@@ -100,7 +100,7 @@ export default function App() {
       {primary ? (
         <div className="grid min-h-0 grid-cols-[150px_minmax(0,1fr)_300px]">
           <ThumbnailStrip />
-          <PageViewer />
+          <DocumentViewer />
           <PagePanel />
         </div>
       ) : (

@@ -48,6 +48,7 @@ function Thumb({ page, n, selected, current, onSelect, onDragStart }: {
         draggable
         onDragStart={onDragStart}
         data-testid={`thumb-${n}`}
+        data-current={current ? "true" : undefined}
         role="option"
         aria-selected={selected}
         aria-label={`Trang ${n}`}
@@ -92,6 +93,13 @@ export default function ThumbnailStrip() {
   });
   // Rotation / reorder / newly opened docs change item sizes.
   useEffect(() => virtualizer.measure(), [pages, docs, virtualizer]);
+  // Keep the current page's thumbnail visible while the document viewer scrolls.
+  useEffect(() => {
+    if (!current) return;
+    const i = pages.findIndex((p) => p.id === current.id);
+    if (i >= 0) virtualizer.scrollToIndex(i, { align: "auto" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id]);
 
   const select = (m: Mods, i: number) => {
     const id = pages[i].id;
