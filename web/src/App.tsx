@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/client";
+import { Button } from "@/components/ui/button";
 import PagePanel from "./components/PagePanel";
 import PageViewer from "./components/PageViewer";
 import ThumbnailStrip from "./components/ThumbnailStrip";
 import TopBar from "./components/TopBar";
 import Dialogs from "./dialogs/Dialogs";
-import { isModalOpen } from "./dialogs/Modal";
+import { cn } from "./lib/utils";
 import { confirmDiscard, usePickAndOpen, useOpenDropped } from "./state/actions";
 import { useApp } from "./state/app";
 import { useCurrentPage, useTargetIds } from "./state/selectors";
@@ -42,7 +43,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isModalOpen() || dialog.kind !== "none" || prompt) return;
+      // Every dialog is state-driven, so a non-"none" dialog (or password prompt) suppresses shortcuts.
+      if (dialog.kind !== "none" || prompt) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest?.("input, select, textarea, [contenteditable]")) return;
       const pages = editor.plan.pages;
@@ -93,20 +95,25 @@ export default function App() {
   };
 
   return (
-    <div className="app" onDragOver={onDragOver} onDragLeave={() => setDragOver(false)} onDrop={onDrop}>
+    <div className="grid h-screen grid-rows-[auto_1fr]" onDragOver={onDragOver} onDragLeave={() => setDragOver(false)} onDrop={onDrop}>
       <TopBar />
       {primary ? (
-        <div className="main">
+        <div className="grid min-h-0 grid-cols-[150px_minmax(0,1fr)_300px]">
           <ThumbnailStrip />
           <PageViewer />
           <PagePanel />
         </div>
       ) : (
-        <div className={`empty${dragOver ? " over" : ""}`}>
-          <div style={{ fontSize: 18 }}>Kéo thả file PDF vào đây</div>
-          <div className="muted">hoặc</div>
-          <button className="primary" onClick={pickAndOpen}>Mở file…</button>
-          <div className="small muted">Mở bằng nút "Mở file…" sẽ đọc file tại chỗ, không copy. Mọi xử lý đều diễn ra trên máy này.</div>
+        <div className={cn(
+          "m-6 flex flex-col items-center justify-center gap-3.5 rounded-2xl border-2 border-dashed text-muted-foreground",
+          dragOver && "border-primary bg-accent text-accent-foreground",
+        )}>
+          <div className="text-lg">Kéo thả file PDF vào đây</div>
+          <div className="text-muted-foreground">hoặc</div>
+          <Button onClick={pickAndOpen}>Mở file…</Button>
+          <div className="max-w-md text-center text-xs text-muted-foreground">
+            Mở bằng nút "Mở file…" sẽ đọc file tại chỗ, không copy. Mọi xử lý đều diễn ra trên máy này.
+          </div>
         </div>
       )}
       <Dialogs />

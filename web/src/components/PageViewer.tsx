@@ -1,9 +1,12 @@
+import { ChevronDown, ChevronUp, FileOutput, RotateCcw, RotateCw, Scissors, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useAnalysis, usePageImage } from "../api/hooks";
+import { Button } from "@/components/ui/button";
 import { formatBytes } from "../lib/format";
 import { baseSize, displaySize } from "../lib/pages";
 import { useApp } from "../state/app";
 import { useCurrentPage, usePageDetail, useTargetIds } from "../state/selectors";
+import IconButton from "./IconButton";
 import RotatedImage from "./RotatedImage";
 
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
@@ -45,8 +48,8 @@ export default function PageViewer() {
 
   if (!page) {
     return (
-      <div className="viewer">
-        <div className="viewer-canvas muted" ref={canvasRef}>Không còn trang nào.</div>
+      <div className="flex min-h-0 min-w-0 flex-col">
+        <div className="flex flex-1 items-center justify-center p-5 text-muted-foreground" ref={canvasRef}>Không còn trang nào.</div>
       </div>
     );
   }
@@ -71,33 +74,37 @@ export default function PageViewer() {
   };
 
   return (
-    <div className="viewer">
-      <div className="viewer-toolbar">
-        <button title="Xóa trang (Delete)" onClick={remove}>Xóa</button>
-        <button title="Xoay trái" aria-label="Xoay trái" onClick={() => dispatch({ type: "rotate", ids: targets, delta: -90 })}>⟲</button>
-        <button title="Xoay phải" aria-label="Xoay phải" onClick={() => dispatch({ type: "rotate", ids: targets, delta: 90 })}>⟳</button>
-        <button title="Trích các trang đang chọn thành file mới" onClick={extract}>Trích</button>
-        <button title="Tách file" onClick={splitHere}>Tách</button>
-        <span className="small muted">{targets.length > 1 ? `${targets.length} trang đang chọn` : ""}</span>
-        <div className="spacer" />
-        <button className="icon" aria-label="Trang trước" title="Trang trước" disabled={index <= 0} onClick={() => goTo(index - 1)}>‹</button>
-        <span className="small">Trang {index + 1} / {pages.length}</span>
-        <button className="icon" aria-label="Trang sau" title="Trang sau" disabled={index >= pages.length - 1} onClick={() => goTo(index + 1)}>›</button>
-        <button className="icon" aria-label="Thu nhỏ" title="Thu nhỏ" onClick={() => step(-1)}>−</button>
-        <button className="small" onClick={() => setZoom(null)} title="Vừa khung">{Math.round(z * 100)}%</button>
-        <button className="icon" aria-label="Phóng to" title="Phóng to" onClick={() => step(1)}>+</button>
+    <div className="flex min-h-0 min-w-0 flex-col">
+      <div className="flex flex-wrap items-center gap-1.5 border-b bg-card px-3 py-2">
+        <Button variant="ghost" onClick={remove}><Trash2 /> Xóa</Button>
+        <IconButton label="Xoay trái" icon={RotateCcw} onClick={() => dispatch({ type: "rotate", ids: targets, delta: -90 })} />
+        <IconButton label="Xoay phải" icon={RotateCw} onClick={() => dispatch({ type: "rotate", ids: targets, delta: 90 })} />
+        <Button variant="ghost" onClick={extract}><FileOutput /> Trích</Button>
+        <Button variant="ghost" onClick={splitHere}><Scissors /> Tách</Button>
+        <span className="text-xs text-muted-foreground">{targets.length > 1 ? `${targets.length} trang đang chọn` : ""}</span>
+        <div className="flex-1" />
+        <IconButton label="Trang trước" icon={ChevronUp} disabled={index <= 0} onClick={() => goTo(index - 1)} />
+        <span className="text-xs">Trang {index + 1} / {pages.length}</span>
+        <IconButton label="Trang sau" icon={ChevronDown} disabled={index >= pages.length - 1} onClick={() => goTo(index + 1)} />
+        <IconButton label="Thu nhỏ" icon={ZoomOut} onClick={() => step(-1)} />
+        <Button variant="ghost" size="sm" onClick={() => setZoom(null)} title="Vừa khung">{Math.round(z * 100)}%</Button>
+        <IconButton label="Phóng to" icon={ZoomIn} onClick={() => step(1)} />
       </div>
-      <div className="viewer-canvas" ref={canvasRef}>
-        <div className="page-frame">
+      <div className="flex flex-1 items-start justify-center overflow-auto p-5" ref={canvasRef}>
+        <div className="relative bg-white shadow-md">
           <RotatedImage src={src} width={size.width * z} height={size.height * z} rotate={page.rotate} alt={`Trang ${index + 1}`}>
             {showBoxes && detail?.placements.map((pl, k) => {
               const img = report?.images[String(pl.xref)];
               const [x0, y0, x1, y1] = pl.bbox;
               const sx = z; // overlay lives in the unrotated inner box (base size * zoom)
               return (
-                <div key={k} className="img-box"
+                <div key={k} className="group absolute border-2 border-transparent hover:border-amber-400 hover:bg-amber-400/15"
                   style={{ left: x0 * sx, top: y0 * sx, width: (x1 - x0) * sx, height: (y1 - y0) * sx }}>
-                  {img && <span className="img-tip">Ảnh {img.width}×{img.height} · {formatBytes(img.size)} · {img.dpi} DPI</span>}
+                  {img && (
+                    <span className="absolute top-1 left-1 hidden rounded bg-amber-100 px-1.5 py-0.5 text-[11px] whitespace-nowrap text-amber-700 group-hover:block dark:bg-amber-950 dark:text-amber-300">
+                      Ảnh {img.width}×{img.height} · {formatBytes(img.size)} · {img.dpi} DPI
+                    </span>
+                  )}
                 </div>
               );
             })}

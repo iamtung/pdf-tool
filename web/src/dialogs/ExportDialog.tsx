@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import type { SplitOption } from "../api/types";
+import { Button } from "@/components/ui/button";
 import { defaultDestination, subsetPlan } from "../lib/dialogs";
 import { describeFileCompression } from "../lib/format";
 import { useStartExport } from "../state/actions";
 import { useApp } from "../state/app";
 import { countOverrides } from "../state/plan";
+import Kv from "../components/Kv";
 import Modal from "./Modal";
 
 export default function ExportDialog({ split, onlyIds }: { split: SplitOption | null; onlyIds?: string[] }) {
@@ -40,23 +42,33 @@ export default function ExportDialog({ split, onlyIds }: { split: SplitOption | 
   };
 
   return (
-    <Modal title={onlyIds ? `Trích ${exportPlan.pages.length} trang` : "Xuất file"} onClose={busy ? undefined : close} actions={<>
-      <button onClick={close} disabled={busy}>Hủy</button>
-      <button className="primary" disabled={busy || empty} onClick={run}>{busy ? "Đang bắt đầu…" : "Xuất"}</button>
-    </>}>
-      <div className="kv"><span>Số trang</span><span>{exportPlan.pages.length}</span></div>
-      <div className="kv"><span>Nén toàn file</span><span>{fc ? describeFileCompression(fc) : "Không"}</span></div>
-      <div className="kv"><span>Trang có mức riêng</span><span>{overrides}</span></div>
-      {split && <div className="kv"><span>Tách</span><span>{split.mode === "ranges" ? split.ranges : `mỗi phần ≤ ${split.maxMB} MB`}</span></div>}
-      <div className="field">
-        Lưu vào
-        <div className="row"><code className="small" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{destDir ?? defaultDir}</code><button onClick={pick} disabled={busy}>Đổi…</button></div>
+    <Modal title={onlyIds ? `Trích ${exportPlan.pages.length} trang` : "Xuất file"} onClose={busy ? undefined : close}
+      actions={<>
+        <Button variant="outline" onClick={close} disabled={busy}>Hủy</Button>
+        <Button disabled={busy || empty} onClick={run}>{busy ? "Đang bắt đầu…" : "Xuất"}</Button>
+      </>}>
+      <Kv label="Số trang">{exportPlan.pages.length}</Kv>
+      <Kv label="Nén toàn file">{fc ? describeFileCompression(fc) : "Không"}</Kv>
+      <Kv label="Trang có mức riêng">{overrides}</Kv>
+      {split && <Kv label="Tách">{split.mode === "ranges" ? split.ranges : `mỗi phần ≤ ${split.maxMB} MB`}</Kv>}
+      <div className="mt-3 space-y-1">
+        <div className="text-[13px] text-muted-foreground">Lưu vào</div>
+        <div className="flex items-center gap-2">
+          <code className="min-w-0 flex-1 truncate text-xs">{destDir ?? defaultDir}</code>
+          <Button variant="outline" onClick={pick} disabled={busy}>Đổi…</Button>
+        </div>
       </div>
-      {empty && <div className="error-text">Không có trang nào để xuất.</div>}
-      {error && <div className="error-text">{error}</div>}
-      {encrypted && <div className="warning">File gốc có mật khẩu. File xuất ra sẽ không có mật khẩu.</div>}
+      {empty && <div className="mt-2 text-xs text-destructive">Không có trang nào để xuất.</div>}
+      {error && <div className="mt-2 text-xs text-destructive">{error}</div>}
+      {encrypted && (
+        <div className="mt-2 rounded-md bg-amber-100 px-2.5 py-2 text-xs leading-relaxed text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+          File gốc có mật khẩu. File xuất ra sẽ không có mật khẩu.
+        </div>
+      )}
       {fc?.advanced?.useGhostscript && overrides > 0 && (
-        <div className="warning" style={{ marginTop: 6 }}>Ghostscript nén đồng đều cả file; mức riêng của {overrides} trang sẽ không được áp dụng.</div>
+        <div className="mt-2 rounded-md bg-amber-100 px-2.5 py-2 text-xs leading-relaxed text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+          Ghostscript nén đồng đều cả file; mức riêng của {overrides} trang sẽ không được áp dụng.
+        </div>
       )}
     </Modal>
   );

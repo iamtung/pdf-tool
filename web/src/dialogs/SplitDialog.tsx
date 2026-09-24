@@ -1,4 +1,8 @@
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { parseRanges, subsetPlan } from "../lib/dialogs";
 import { useApp } from "../state/app";
 import Modal from "./Modal";
@@ -27,23 +31,29 @@ export default function SplitDialog({ ranges: initialRanges, maxMB: initialMax, 
     });
   };
   return (
-    <Modal title="Tách file" onClose={close} actions={<><button onClick={close}>Hủy</button><button className="primary" disabled={!!error} onClick={next}>Tiếp tục…</button></>}>
-      <label className="row"><input type="radio" checked={mode === "ranges"} onChange={() => setMode("ranges")} /> Theo khoảng trang</label>
-      {mode === "ranges" && (
-        <label className="field">
-          Khoảng trang (1–{n}{onlyIds ? ", tính trên các trang đã chọn" : ""}), mỗi khoảng thành một file. Trang không nằm trong khoảng nào sẽ không được xuất.
-          <input value={ranges} onChange={(e) => setRanges(e.target.value)} aria-invalid={mode === "ranges" && !!error} />
-        </label>
+    <Modal title="Tách file" onClose={close}
+      actions={<>
+        <Button variant="outline" onClick={close}>Hủy</Button>
+        <Button disabled={!!error} onClick={next}>Tiếp tục…</Button>
+      </>}>
+      <ToggleGroup type="single" value={mode} className="w-full" onValueChange={(v) => { if (v) setMode(v as "ranges" | "size"); }}>
+        <ToggleGroupItem value="ranges" className="flex-1">Theo khoảng trang</ToggleGroupItem>
+        <ToggleGroupItem value="size" className="flex-1">Theo dung lượng tối đa mỗi phần</ToggleGroupItem>
+      </ToggleGroup>
+      {mode === "ranges" ? (
+        <div className="mt-3 space-y-1">
+          <Label htmlFor="split-ranges">Khoảng trang (1–{n}{onlyIds ? ", tính trên các trang đã chọn" : ""})</Label>
+          <Input id="split-ranges" value={ranges} aria-invalid={!!error} onChange={(e) => setRanges(e.target.value)} />
+          <div className="text-xs text-muted-foreground">Mỗi khoảng thành một file. Trang không nằm trong khoảng nào sẽ không được xuất.</div>
+        </div>
+      ) : (
+        <div className="mt-3 space-y-1">
+          <Label htmlFor="split-max">Tối đa mỗi phần (MB)</Label>
+          <Input id="split-max" type="number" min={0.1} step={0.1} value={maxMB} className="w-28"
+            aria-invalid={!!error} onChange={(e) => setMaxMB(e.target.value)} />
+        </div>
       )}
-      <label className="row" style={{ marginTop: 8 }}><input type="radio" checked={mode === "size"} onChange={() => setMode("size")} /> Theo dung lượng tối đa mỗi phần</label>
-      {mode === "size" && (
-        <label className="field">
-          Tối đa mỗi phần (MB)
-          <input type="number" min={0.1} step={0.1} value={maxMB} style={{ width: 120 }} aria-invalid={mode === "size" && !!error}
-            onChange={(e) => setMaxMB(e.target.value)} />
-        </label>
-      )}
-      {error && <div className="error-text">{error}</div>}
+      {error && <div className="mt-2 text-xs text-destructive">{error}</div>}
     </Modal>
   );
 }

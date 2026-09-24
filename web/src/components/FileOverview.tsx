@@ -1,6 +1,8 @@
 import { useAnalysis } from "../api/hooks";
+import { Progress } from "@/components/ui/progress";
 import { KIND_LABEL, formatBytes, percent } from "../lib/format";
 import { useApp } from "../state/app";
+import Kv from "./Kv";
 
 const PARTS = [
   ["images", "Ảnh", "var(--img)"],
@@ -13,19 +15,21 @@ export default function FileOverview() {
   const { primary, editor, setCurrentId, setSelected } = useApp();
   const { report, job, error } = useAnalysis(primary?.docId ?? null);
   if (!primary) return null;
-  if (error) return <div className="error-text">Không phân tích được: {error.message}</div>;
+  if (error) return <div className="pt-2 text-xs text-destructive">Không phân tích được: {error.message}</div>;
   if (!report) {
     return (
-      <section>
-        <h3>Phân tích</h3>
-        <div className="small muted">{job?.message || "Đang phân tích…"}</div>
-        <div className="progress" style={{ marginTop: 8 }}><div style={{ width: `${job?.progress ?? 5}%` }} /></div>
+      <section className="pt-1">
+        <h3 className="mb-1.5 text-sm font-semibold">Phân tích</h3>
+        <div className="text-xs text-muted-foreground">{job?.message || "Đang phân tích…"}</div>
+        <Progress className="mt-2" value={job?.progress ?? 5} />
       </section>
     );
   }
   const total = report.size || 1;
   const goTo = (pageIndex: number) => {
-    const p = editor.plan.pages.find((pp) => pp.source.type === "pdf" && pp.source.docId === primary.docId && pp.source.index === pageIndex);
+    const p = editor.plan.pages.find(
+      (pp) => pp.source.type === "pdf" && pp.source.docId === primary.docId && pp.source.index === pageIndex,
+    );
     if (p) {
       setCurrentId(p.id);
       setSelected(new Set([p.id]));
@@ -34,44 +38,48 @@ export default function FileOverview() {
   const heavy = report.pagesDetail.filter((p) => p.heavy);
 
   return (
-    <>
+    <div className="space-y-3 pt-1">
       <section>
-        <h3>Phân tích cả file</h3>
-        <div className="bar">
+        <h3 className="mb-1.5 text-sm font-semibold">Phân tích cả file</h3>
+        <div className="my-1.5 flex h-2.5 overflow-hidden rounded-full bg-muted">
           {PARTS.map(([k, , color]) => (
             <div key={k} style={{ width: percent(report.composition[k], total), background: color }} />
           ))}
         </div>
         {PARTS.map(([k, label, color]) => (
-          <div key={k} className="kv">
-            <span><span style={{ color }}>■</span> {label}</span>
-            <span>{formatBytes(report.composition[k])} · {percent(report.composition[k], total)}</span>
-          </div>
+          <Kv key={k} label={<><span style={{ color }}>■</span> {label}</>}>
+            {formatBytes(report.composition[k])} · {percent(report.composition[k], total)}
+          </Kv>
         ))}
-        <div className="kv" style={{ marginTop: 6 }}>
-          <span>Loại trang</span>
-          <span>{(["scan", "image_heavy", "vector"] as const).map((k) => `${KIND_LABEL[k]} ${report.kinds[k] ?? 0}`).join(" · ")}</span>
-        </div>
-        {heavy.length > 0 && <div className="kv"><span>Trang nặng bất thường</span><span>{heavy.length}</span></div>}
+        <Kv label="Loại trang" className="mt-1.5">
+          {(["scan", "image_heavy", "vector"] as const)
+            .map((k) => `${KIND_LABEL[k]} ${report.kinds[k] ?? 0}`).join(" · ")}
+        </Kv>
+        {heavy.length > 0 && <Kv label="Trang nặng bất thường">{heavy.length}</Kv>}
       </section>
       {report.suggestions.length > 0 && (
-        <section>
-          <h3>Gợi ý</h3>
-          {report.suggestions.map((s, i) => <div key={i} className="hint" style={{ marginBottom: 6 }}>{s}</div>)}
+        <section className="border-t pt-3">
+          <h3 className="mb-1.5 text-sm font-semibold">Gợi ý</h3>
+          {report.suggestions.map((s, i) => (
+            <div key={i} className="mb-1.5 rounded-md bg-accent px-2.5 py-2 text-xs leading-relaxed text-accent-foreground">
+              {s}
+            </div>
+          ))}
         </section>
       )}
-      <section>
-        <h3>Ảnh nặng nhất</h3>
+      <section className="border-t pt-3">
+        <h3 className="mb-1.5 text-sm font-semibold">Ảnh nặng nhất</h3>
         {report.topImages.map((im) => (
-          <div key={im.xref} className="kv">
-            <button className="link" onClick={() => goTo(im.pages[0])}>
+          <Kv key={im.xref} label={
+            <button className="text-left text-primary hover:underline" onClick={() => goTo(im.pages[0])}>
               Trang {im.pages.map((p) => p + 1).slice(0, 3).join(", ")}{im.pages.length > 3 ? "…" : ""}
             </button>
-            <span className="small">{im.width}×{im.height} · {im.dpi} DPI · {formatBytes(im.size)}</span>
-          </div>
+          }>
+            <span className="text-xs">{im.width}×{im.height} · {im.dpi} DPI · {formatBytes(im.size)}</span>
+          </Kv>
         ))}
-        {!report.topImages.length && <div className="small muted">File không có ảnh.</div>}
+        {!report.topImages.length && <div className="text-xs text-muted-foreground">File không có ảnh.</div>}
       </section>
-    </>
+    </div>
   );
 }

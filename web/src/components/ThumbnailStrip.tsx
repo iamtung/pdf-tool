@@ -1,9 +1,11 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { usePageImage } from "../api/hooks";
 import type { PlanPage } from "../api/types";
 import { LEVEL_LABEL, formatBytes } from "../lib/format";
 import { displaySize } from "../lib/pages";
+import { cn } from "@/lib/utils";
 import { useApp } from "../state/app";
 import { useCurrentPage, usePageDetail } from "../state/selectors";
 import RotatedImage from "./RotatedImage";
@@ -25,8 +27,6 @@ function Thumb({ page, n, selected, current, onSelect, onDragStart }: {
   const { width, height } = displaySize(page, docs);
   const h = Math.round((THUMB_W * height) / width);
   const src = usePageImage(page.source, Math.min(320, Math.round(160 * window.devicePixelRatio)));
-  const cls = ["thumb", detail?.heavy && "heavy", selected && "selected", current && "current"]
-    .filter(Boolean).join(" ");
   const est = estimates[page.id];
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== "Enter" && e.key !== " ") return;
@@ -35,16 +35,37 @@ function Thumb({ page, n, selected, current, onSelect, onDragStart }: {
   };
   return (
     <>
-      <div className={cls} style={{ height: h }} onClick={onSelect} onKeyDown={onKeyDown} draggable
-        onDragStart={onDragStart} data-testid={`thumb-${n}`}
-        role="option" aria-selected={selected} aria-label={`Trang ${n}`} tabIndex={0}>
+      <div
+        className={cn(
+          "relative flex cursor-pointer items-center justify-center overflow-hidden rounded-md border bg-white",
+          detail?.heavy && "border-2 border-amber-400",
+          current && "ring-1 ring-primary",
+          selected && "outline-3 outline-offset-1 outline-primary",
+        )}
+        style={{ height: h }}
+        onClick={onSelect}
+        onKeyDown={onKeyDown}
+        draggable
+        onDragStart={onDragStart}
+        data-testid={`thumb-${n}`}
+        role="option"
+        aria-selected={selected}
+        aria-label={`Trang ${n}`}
+        tabIndex={0}
+      >
         <RotatedImage src={src} width={THUMB_W - 2} height={h - 2} rotate={page.rotate} alt={`Trang ${n}`} />
-        {detail?.heavy && <span className="tag size">{formatBytes(detail.size)}</span>}
+        {detail?.heavy && (
+          <span className="absolute top-1 left-1 rounded bg-amber-100 px-1.5 py-px text-[10px] text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+            {formatBytes(detail.size)}
+          </span>
+        )}
         {page.compress && (
-          <span className="tag level">{LEVEL_LABEL[page.compress]}{est ? ` · ~${formatBytes(est)}` : ""}</span>
+          <span className="absolute right-1 bottom-1 rounded bg-accent px-1.5 py-px text-[10px] text-accent-foreground">
+            {LEVEL_LABEL[page.compress]}{est ? ` · ~${formatBytes(est)}` : ""}
+          </span>
         )}
       </div>
-      <div className="thumb-label">{n}</div>
+      <div className="py-1 text-center text-[11px] text-muted-foreground">{n}</div>
     </>
   );
 }
@@ -126,15 +147,27 @@ export default function ThumbnailStrip() {
   };
 
   return (
-    <div className="strip" ref={parent} role="listbox" aria-multiselectable aria-label="Các trang"
+    <div className="relative min-h-0 overflow-y-auto border-r bg-muted/30" ref={parent} role="listbox"
+      aria-multiselectable aria-label="Các trang"
       onDragLeave={dragLeave} onDragEnd={() => setDropIndex(null)}>
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((item) => (
-          <div key={item.key} className={`thumb-slot${dropIndex === item.index ? " drop-before" : ""}`}
+          <div key={item.key} className="absolute right-0 left-0 px-3.5"
             style={{ top: item.start, height: item.size }}
             onDragOver={(e) => dragOver(e, item.index)} onDrop={(e) => drop(e, item.index)}>
-            <div className="gap">
-              <button onClick={() => setDialog({ kind: "insert", at: item.index })}>+ Chèn</button>
+            <div className="group/gap relative flex h-3.5 items-center justify-center"
+              data-testid={`insert-gap-${item.index}`}>
+              {dropIndex === item.index && (
+                <span className="absolute inset-x-0 top-1/2 h-[3px] -translate-y-1/2 rounded bg-primary" />
+              )}
+              <button
+                type="button"
+                aria-label="+ Chèn"
+                className="hidden rounded border bg-background px-2 text-[11px] leading-3.5 group-hover/gap:block"
+                onClick={() => setDialog({ kind: "insert", at: item.index })}
+              >
+                <Plus className="inline size-3" /> Chèn
+              </button>
             </div>
             {item.index < pages.length && (
               <Thumb

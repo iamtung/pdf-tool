@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { useApp } from "../state/app";
 import CompressDialog from "./CompressDialog";
 import ExportDialog from "./ExportDialog";
@@ -34,14 +35,17 @@ function MainDialog() {
     case "changed":
       return (
         <Modal title="File đã thay đổi" onClose={close}
-          actions={<><button onClick={close}>Để sau</button><button className="primary" onClick={() => openPath(dialog.path, true)}>Tải lại</button></>}>
-          <p>File gốc đã bị sửa hoặc di chuyển kể từ lúc mở. Tải lại file sẽ bỏ các thay đổi chưa xuất.</p>
+          actions={<>
+            <Button variant="outline" onClick={close}>Để sau</Button>
+            <Button onClick={() => openPath(dialog.path, true)}>Tải lại</Button>
+          </>}>
+          <p className="text-sm">File gốc đã bị sửa hoặc di chuyển kể từ lúc mở. Tải lại file sẽ bỏ các thay đổi chưa xuất.</p>
         </Modal>
       );
     case "error":
       return (
-        <Modal title="Có lỗi xảy ra" onClose={close} actions={<button className="primary" onClick={close}>Đóng</button>}>
-          <p>{dialog.message}</p>
+        <Modal title="Có lỗi xảy ra" onClose={close} actions={<Button onClick={close}>Đóng</Button>}>
+          <p className="text-sm">{dialog.message}</p>
         </Modal>
       );
     default:

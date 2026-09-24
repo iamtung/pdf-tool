@@ -1,17 +1,46 @@
-import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useAnalysis, useEstimate } from "../api/hooks";
 import type { Level, Plan } from "../api/types";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { KIND_LABEL, LEVEL_LABEL, formatBytes, paperName } from "../lib/format";
 import { displaySize } from "../lib/pages";
+import { tabAfterPageChange, type PanelTab } from "../lib/panel";
 import { useApp } from "../state/app";
 import { useCurrentPage, usePageDetail, useTargetIds } from "../state/selectors";
 import FileOverview from "./FileOverview";
+import Kv from "./Kv";
 
 const LEVELS: Level[] = ["light", "medium", "strong"];
 
 export default function PagePanel() {
-  const { selected } = useApp();
-  return <aside className="panel">{selected.size ? <PageInfo /> : <FileOverview />}</aside>;
+  const { page } = useCurrentPage();
+  const pageId = page?.id ?? null;
+  const [tab, setTab] = useState<PanelTab>("page");
+  const previous = useRef(pageId);
+  useEffect(() => {
+    setTab((current) => tabAfterPageChange(previous.current, pageId, current));
+    previous.current = pageId;
+  }, [pageId]);
+
+  return (
+    <aside className="flex min-h-0 flex-col border-l bg-card">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as PanelTab)} className="min-h-0 flex-1">
+        <TabsList className="mx-2 mt-2">
+          <TabsTrigger value="page">Trang</TabsTrigger>
+          <TabsTrigger value="overview">Tổng quan</TabsTrigger>
+        </TabsList>
+        <TabsContent value="page" className="min-h-0 overflow-y-auto px-3 pb-3">
+          <PageInfo />
+        </TabsContent>
+        <TabsContent value="overview" className="min-h-0 overflow-y-auto px-3 pb-3">
+          <FileOverview />
+        </TabsContent>
+      </Tabs>
+    </aside>
+  );
 }
 
 function PageInfo() {
@@ -52,21 +81,27 @@ function PageInfo() {
   };
 
   return (
-    <>
+    <div className="space-y-3 pt-1">
       <section>
-        <h3>Trang {index + 1}{targets.length > 1 ? ` (+${targets.length - 1} trang chọn)` : ""}</h3>
+        <h3 className="mb-1.5 text-sm font-semibold">
+          Trang {index + 1}{targets.length > 1 ? ` (+${targets.length - 1} trang chọn)` : ""}
+        </h3>
         {detail ? (
           <>
-            <div className="kv"><span>Dung lượng</span><span style={{ color: detail.heavy ? "var(--warn)" : undefined, fontWeight: 600 }}>{formatBytes(detail.size)}</span></div>
-            <div className="kv"><span>Loại trang</span><span>{KIND_LABEL[detail.kind]}</span></div>
-            <div className="kv"><span>Khổ giấy</span><span>{paperName(size.width, size.height)}</span></div>
-            <div className="kv"><span>Số ảnh</span><span>{detail.imageCount}</span></div>
-            <div className="kv"><span>DPI cao nhất</span><span>{detail.maxDpi || "—"}</span></div>
-            <div className="kv"><span>Font</span><span>{detail.fontCount}</span></div>
+            <Kv label="Dung lượng">
+              <span className={detail.heavy ? "font-semibold text-amber-600 dark:text-amber-400" : "font-semibold"}>
+                {formatBytes(detail.size)}
+              </span>
+            </Kv>
+            <Kv label="Loại trang">{KIND_LABEL[detail.kind]}</Kv>
+            <Kv label="Khổ giấy">{paperName(size.width, size.height)}</Kv>
+            <Kv label="Số ảnh">{detail.imageCount}</Kv>
+            <Kv label="DPI cao nhất">{detail.maxDpi || "—"}</Kv>
+            <Kv label="Font">{detail.fontCount}</Kv>
             {detail.images.map((x) => {
               const im = report?.images[String(x)];
               return im ? (
-                <div key={x} className="small muted" style={{ marginTop: 4 }}>
+                <div key={x} className="mt-1 text-xs text-muted-foreground">
                   Ảnh {im.width}×{im.height} · {im.dpi} DPI · {im.filter ?? "?"} · {formatBytes(im.size)}
                   {im.pages.length > 1 ? ` · dùng ở ${im.pages.length} trang` : ""}
                 </div>
@@ -74,40 +109,44 @@ function PageInfo() {
             })}
           </>
         ) : (
-          <div className="small muted">
+          <div className="text-xs text-muted-foreground">
             {page.source.type === "pdf" ? "Đang phân tích…" : page.source.type === "blank" ? "Trang trắng" : "Trang từ ảnh"}
           </div>
         )}
       </section>
       {allBlank ? (
-        <section>
-          <h3>Nén</h3>
-          <div className="small muted">Trang trắng — không có gì để nén.</div>
+        <section className="border-t pt-3">
+          <h3 className="mb-1.5 text-sm font-semibold">Nén</h3>
+          <div className="text-xs text-muted-foreground">Trang trắng — không có gì để nén.</div>
         </section>
       ) : (
-      <section>
-        <h3>Nén {targets.length > 1 ? `${targets.length} trang` : "trang này"}</h3>
-        <div className="chips">
-          {LEVELS.map((lv) => (
-            <button key={lv} className={`chip${level === lv ? " on" : ""}`} onClick={() => setLevel(lv)}>{LEVEL_LABEL[lv]}</button>
-          ))}
-        </div>
-        <div className="kv" style={{ marginTop: 10 }}>
-          <span>Ước tính</span>
-          <span style={{ fontWeight: 600 }} data-testid="page-estimate">
-            {est.result ? `${formatBytes(est.result.originalBytes)} → ~${formatBytes(est.result.estimatedBytes)}` : est.loading ? "Đang tính…" : "—"}
-          </span>
-        </div>
-        {est.error && <div className="error-text">{est.error}</div>}
-        {editor.plan.fileCompression && (
-          <div className="small muted" style={{ margin: "6px 0" }}>Mức riêng sẽ dùng thay cho mức nén toàn file ở các trang này.</div>
-        )}
-        <div className="row" style={{ marginTop: 8 }}>
-          <button className="primary" style={{ flex: 1 }} onClick={apply}>Áp dụng</button>
-          {anyOverride && <button onClick={clearLevel}>Bỏ mức riêng</button>}
-        </div>
-      </section>
+        <section className="border-t pt-3">
+          <h3 className="mb-2 text-sm font-semibold">Nén {targets.length > 1 ? `${targets.length} trang` : "trang này"}</h3>
+          <ToggleGroup type="single" value={level} spacing={2} className="w-full"
+            onValueChange={(v) => { if (v) setLevel(v as Level); }}>
+            {LEVELS.map((lv) => (
+              <ToggleGroupItem key={lv} value={lv} className="flex-1">{LEVEL_LABEL[lv]}</ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+          <Kv label="Ước tính" className="mt-2.5">
+            <span className="font-semibold" data-testid="page-estimate">
+              {est.result
+                ? `${formatBytes(est.result.originalBytes)} → ~${formatBytes(est.result.estimatedBytes)}`
+                : est.loading ? "Đang tính…" : "—"}
+            </span>
+          </Kv>
+          {est.error && <div className="text-xs text-destructive">{est.error}</div>}
+          {editor.plan.fileCompression && (
+            <div className="my-1.5 text-xs text-muted-foreground">
+              Mức riêng sẽ dùng thay cho mức nén toàn file ở các trang này.
+            </div>
+          )}
+          <div className="mt-2 flex gap-2">
+            <Button className="flex-1" onClick={apply}><Check /> Áp dụng</Button>
+            {anyOverride && <Button variant="outline" onClick={clearLevel}>Bỏ mức riêng</Button>}
+          </div>
+        </section>
       )}
-    </>
+    </div>
   );
 }

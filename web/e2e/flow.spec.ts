@@ -16,7 +16,7 @@ test("open → delete → insert blank → per-page → file compression → exp
   await expect(page.getByTestId("thumb-5")).toHaveCount(0);
 
   // insert a blank page before page 1
-  await page.locator(".gap").first().hover(); // the button only shows while the gap is hovered
+  await page.getByTestId("insert-gap-0").hover(); // the button only shows while the gap is hovered
   await page.getByRole("button", { name: "+ Chèn" }).first().click();
   await page.getByRole("button", { name: "Trang trắng" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Chèn", exact: true }).click();
@@ -24,7 +24,7 @@ test("open → delete → insert blank → per-page → file compression → exp
 
   // per-page compression on page 2 (the scan)
   await page.getByTestId("thumb-2").click();
-  await page.getByRole("button", { name: "Mạnh" }).click();
+  await page.getByRole("radio", { name: "Mạnh" }).click();
   await expect(page.getByTestId("page-estimate")).toContainText("→", { timeout: 60_000 });
   await page.getByRole("button", { name: "Áp dụng" }).click();
   await expect(page.getByTestId("thumb-2")).toContainText("Mạnh");
@@ -39,7 +39,7 @@ test("open → delete → insert blank → per-page → file compression → exp
 
   // a page level set afterwards survives
   await page.getByTestId("thumb-3").click();
-  await page.getByRole("button", { name: "Nhẹ" }).click();
+  await page.getByRole("radio", { name: "Nhẹ" }).click();
   await page.getByRole("button", { name: "Áp dụng" }).click();
   await expect(page.getByTestId("thumb-3")).toContainText("Nhẹ");
 
