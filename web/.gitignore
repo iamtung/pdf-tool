@@ -3,3 +3,4 @@ e2e/.fixtures/
 test-results/
 playwright-report/
 node_modules/
+*.tsbuildinfo
