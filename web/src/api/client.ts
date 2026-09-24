@@ -20,7 +20,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
     try {
       const data = await res.json();
       code = data.code ?? code;
-      message = data.message ?? (typeof data.detail === "string" ? data.detail : message);
+      message = data.message ?? message;
     } catch {
       /* not JSON */
     }
@@ -56,7 +56,13 @@ export const api = {
       body: JSON.stringify({ source, width }),
     });
     if (!res.ok) throw new ApiError("internal", "Không vẽ được trang.", res.status);
-    return URL.createObjectURL(await res.blob());
+    const blob = await res.blob();
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
   },
 
   estimate: (plan: Plan, pageIds: string[] | null, level: Level | null) =>

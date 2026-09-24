@@ -3,20 +3,67 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "./client";
 import type { EstimateResult, JobState, Level, Plan, Source } from "./types";
 
-/** Follow a job over SSE until it finishes. */
+const TERMINAL_STATUSES = ["done", "failed", "cancelled"];
+
+/** Follow a job over SSE until it finishes; falls back to polling if the stream errors. */
 export function useJob<R>(jobId: string | null): JobState<R> | null {
   const [state, setState] = useState<JobState<R> | null>(null);
+  const stateRef = useRef<JobState<R> | null>(null);
+  stateRef.current = state;
   useEffect(() => {
     setState(null);
+    stateRef.current = null;
     if (!jobId) return;
+    let cancelled = false;
     const es = new EventSource(`/api/jobs/${jobId}/events`);
+
+    const pollFallback = async () => {
+      let failures = 0;
+      while (!cancelled) {
+        try {
+          const job = await api.job<R>(jobId);
+          failures = 0;
+          if (cancelled) return;
+          setState(job);
+          if (TERMINAL_STATUSES.includes(job.status)) return;
+        } catch {
+          failures += 1;
+          if (failures >= 3) {
+            if (cancelled) return;
+            const base: JobState<R> = stateRef.current ?? {
+              id: jobId,
+              kind: "",
+              status: "queued",
+              progress: 0,
+              message: "",
+              result: null,
+              error: null,
+            };
+            setState({
+              ...base,
+              status: "failed",
+              error: { code: "internal", message: "Mất kết nối tới máy chủ." },
+            });
+            return;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    };
+
     es.onmessage = (e) => {
       const job = JSON.parse(e.data) as JobState<R>;
       setState(job);
-      if (["done", "failed", "cancelled"].includes(job.status)) es.close();
+      if (TERMINAL_STATUSES.includes(job.status)) es.close();
     };
-    es.onerror = () => es.close();
-    return () => es.close();
+    es.onerror = () => {
+      es.close();
+      void pollFallback();
+    };
+    return () => {
+      cancelled = true;
+      es.close();
+    };
   }, [jobId]);
   return state;
 }
